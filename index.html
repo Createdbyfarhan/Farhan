@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>PrettyPick | Premium Accessories</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="shared.js"></script>
+</head>
+<body>
+<header class="navbar pp-header">
+  <div class="nav-container" id="pp-nav-root"></div>
+</header>
+
+<div class="search-section">
+  <div class="search-container">
+    <div class="search-input-wrapper">
+      <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="search-input" placeholder="Explore rings & bracelets…" autocomplete="off" aria-label="Search">
+      <button type="button" id="search-clear" class="search-clear hidden" aria-label="Clear search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div id="search-dropdown" class="search-dropdown hidden" role="listbox"></div>
+  </div>
+</div>
+
+<section class="hero-section" id="home">
+  <div class="carousel-container" id="carousel" aria-roledescription="carousel" aria-label="Featured banners">
+    <div class="carousel-track" id="carousel-track"></div>
+    <div class="carousel-dots" id="carousel-dots" aria-label="Slide navigation"></div>
+  </div>
+</section>
+
+<main>
+  <section class="section-container" id="categories">
+    <div class="section-head" data-reveal>
+      <span class="eyebrow">Curated Selection</span>
+      <h2 class="section-title">Shop by Category</h2>
+      <p class="section-sub">Discover our collection of premium accessories, thoughtfully organised for every style.</p>
+    </div>
+
+    <div class="cat-row" id="cat-row" data-reveal="fast">
+      <button class="category-capsule active" data-cat-id="all" data-role="all" type="button">All Accessories</button>
+    </div>
+    <div class="cat-subpanel-portal" id="cat-subpanel-portal" aria-live="polite"></div>
+  </section>
+
+  <section class="section-container" id="trending">
+    <div class="section-head" data-reveal>
+      <span class="eyebrow">New Season</span>
+      <h2 class="section-title" id="trending-title">Trending Products</h2>
+      <p class="section-sub" id="trending-sub">The pieces everyone is reaching for this month.</p>
+    </div>
+    <div class="product-grid" id="trending-grid" data-reveal-stagger>
+      <div class="skeleton" style="aspect-ratio:1/1.18;border-radius:22px;"></div>
+      <div class="skeleton" style="aspect-ratio:1/1.18;border-radius:22px;"></div>
+      <div class="skeleton" style="aspect-ratio:1/1.18;border-radius:22px;"></div>
+      <div class="skeleton" style="aspect-ratio:1/1.18;border-radius:22px;"></div>
+    </div>
+  </section>
+</main>
+
+<footer id="pp-footer-root"></footer>
+
+<script type="module">
+import { db } from './firebase-config.js';
+import { collection, getDocs, query, where } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+let products = [], categories = [], subcategories = [], searchIndex = [];
+let banners = [], realCount = 0, currentSlide = 0, isTransitioning = false, carouselInterval = null;
+
+let activeCatId = 'all';
+let activeSubId = null;
+let openCatGroupId = null;
+
+const track = document.getElementById('carousel-track');
+const dotsContainer = document.getElementById('carousel-dots');
+const carouselEl = document.getElementById('carousel');
+const catRowEl = document.getElementById('cat-row');
+const subPortal = document.getElementById('cat-subpanel-portal');
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- data ---------- */
+const loadData = async () => {
+  try {
+    const [pSnap, cSnap, sSnap] = await Promise.all([
+      getDocs(query(collection(db, 'products'), where('active', '==', true))),
+      getDocs(query(collection(db, 'categories'), where('active', '==', true))),
+      getDocs(collection(db, 'subcategories'))
+    ]);
+    products = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    categories = cSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    subcategories = sSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.active !== false);
+    window.__PP_CACHE.products = pSnap.docs.map(normalizeProduct);
+    window.__PP_CACHE.categories = categories;
+    window.__PP_CACHE.subcategories = subcategories;
+    window.__PP_CACHE.ready = true;
+
+    renderCategoryRow();
+    rebuildSearchIndex();
+
+    const params = new URLSearchParams(location.search);
+    const catId = params.get('category');
+    const subId = params.get('sub');
+    if (catId) {
+      const cat = categories.find(c => c.id === catId);
+      if (cat) {
+        activateCategory(catId, subId || null, { scroll: false });
+      } else { filterProducts(); }
+    } else { filterProducts(); }
+  } catch (err) {
+    console.error('Load error:', err);
+    document.getElementById('trending-grid').innerHTML =
+      `<p style="grid-column:1/-1;text-align:center;color:#C0362C;padding:40px;">Failed to load products. ${err.code === 'permission-denied' ? 'Check Firestore rules.' : 'Please refresh.'}</p>`;
+  }
+};
+
+/* ---------- category row ---------- */
+function renderCategoryRow() {
+  catRowEl.querySelectorAll('.cat-group').forEach(g => g.remove());
+
+  if (!categories.length) return;
+
+  const ordered = sortCategories(categories);
+  const subMap = new Map();
+  subcategories.forEach(s => {
+    if (!subMap.has(s.categoryId)) subMap.set(s.categoryId, []);
+    subMap.get(s.categoryId).push(s);
+  });
+  subMap.forEach(arr => arr.sort((a,b) => (a.order||0) - (b.order||0)));
+
+  ordered.forEach(cat => {
+    const subs = subMap.get(cat.id) || [];
+    const hasSubs = subs.length > 0;
+
+    const grp = document.createElement('div');
+    grp.className = 'cat-group';
+    grp.dataset.catId = cat.id;
+    grp.innerHTML = `
+      <button class="category-capsule" data-cat-id="${escapeHtml(cat.id)}" data-has-subs="${hasSubs}" type="button" aria-expanded="false">
+        ${escapeHtml(cat.name)}
+        ${hasSubs ? `<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>` : ''}
+      </button>`;
+
+    grp.querySelector('.category-capsule').addEventListener('click', () => {
+      if (openCatGroupId === cat.id) {
+        activateCategory('all', null, { scroll: true });
+      } else {
+        activateCategory(cat.id, null, { scroll: true });
+      }
+    });
+
+    catRowEl.appendChild(grp);
+  });
+
+  const allBtn = catRowEl.querySelector('.category-capsule[data-role="all"]');
+  if (allBtn) {
+    allBtn.addEventListener('click', () => activateCategory('all', null, { scroll: true }));
+  }
+}
+
+/* ---------- activate category / sub ---------- */
+function activateCategory(catId, subId, { scroll = true } = {}) {
+  activeCatId = catId || 'all';
+  activeSubId = subId || null;
+
+  catRowEl.querySelectorAll('.category-capsule').forEach(b => {
+    const isActive = b.dataset.catId === activeCatId;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-expanded', String(isActive && openCatGroupId !== null));
+  });
+
+  if (scroll && catId !== 'all') {
+    const pill = catRowEl.querySelector(`.category-capsule[data-cat-id="${CSS.escape(catId)}"]`);
+    if (pill && catRowEl.scrollWidth > catRowEl.clientWidth) {
+      pill.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', inline: 'start', block: 'nearest' });
+    }
+  }
+
+  const subsForCat = subcategories.filter(s => s.categoryId === activeCatId && s.active !== false).sort((a,b) => (a.order||0) - (b.order||0));
+
+  if (activeCatId === 'all' || !subsForCat.length) {
+    openCatGroupId = null;
+    closeSubPortal();
+    filterProducts();
+    return;
+  }
+
+  openCatGroupId = activeCatId;
+  openSubPortal(activeCatId, subsForCat);
+  filterProducts();
+}
+
+function openSubPortal(catId, subs) {
+  const cat = categories.find(c => c.id === catId);
+  if (!cat) return closeSubPortal();
+
+  subPortal.innerHTML = `
+    <div class="cat-subpanel" role="group" aria-label="${escapeHtml(cat.name)} subcategories">
+      <button class="sub-chip ${!activeSubId ? 'active' : ''}" data-sub-id="" data-role="all" type="button">All ${escapeHtml(cat.name)}</button>
+      ${subs.map(s => `<button class="sub-chip ${activeSubId === s.id ? 'active' : ''}" data-sub-id="${escapeHtml(s.id)}" type="button">${escapeHtml(s.name)}</button>`).join('')}
+    </div>`;
+
+  subPortal.classList.add('open');
+
+  subPortal.querySelectorAll('.sub-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const sid = chip.dataset.subId || null;
+      activeSubId = sid;
+      subPortal.querySelectorAll('.sub-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      filterProducts();
+    });
+  });
+}
+function closeSubPortal() {
+  subPortal.classList.remove('open');
+  subPortal.innerHTML = '';
+}
+
+/* ---------- filter + render grid ---------- */
+function filterProducts() {
+  const g = document.getElementById('trending-grid');
+  const titleEl = document.getElementById('trending-title');
+  const subEl = document.getElementById('trending-sub');
+  g.innerHTML = '';
+
+  let filtered = products.slice();
+  let titleText = 'Trending Products';
+  let subText = 'The pieces everyone is reaching for this month.';
+
+  if (activeCatId !== 'all') {
+    const cat = categories.find(c => c.id === activeCatId);
+    filtered = filtered.filter(p => p.categoryId === activeCatId);
+    titleText = cat ? cat.name : 'Products';
+    if (activeSubId) {
+      const sub = subcategories.find(s => s.id === activeSubId);
+      filtered = filtered.filter(p => p.subcategoryId === activeSubId);
+      if (sub) { titleText = sub.name; subText = `Products in ${cat?.name || ''} › ${sub.name}`; }
+    } else {
+      subText = cat ? `All products in ${cat.name}` : subText;
+    }
+  }
+  titleEl.textContent = titleText;
+  subEl.textContent = subText;
+
+  if (!filtered.length) {
+    g.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px;">No products available yet.</p>';
+    return;
+  }
+  filtered.slice(0, 12).forEach(p => g.appendChild(createProductCard(normalizeProduct(p))));
+  g.classList.remove('revealed');
+  void g.offsetWidth;
+  g.classList.add('revealed');
+}
+
+/* ---------- banners ---------- */
+async function loadBanners() {
+  try {
+    const snap = await getDocs(query(collection(db, 'banners'), where('active', '==', true)));
+    banners = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.order||0)-(b.order||0));
+    renderCarousel();
+    startCarousel();
+  } catch (err) {
+    console.error('Banner load error:', err);
+    renderFallbackBanner();
+  }
+}
+function renderFallbackBanner() {
+  realCount = 1;
+  track.innerHTML = `
+    <div class="carousel-slide active">
+      <div class="slide-overlay"></div>
+      <div class="slide-content">
+        <span class="eyebrow">Welcome</span>
+        <h1>Timeless Elegance</h1>
+        <p>Discover curated accessories that elevate every moment.</p>
+        <a href="#trending" class="btn btn-primary">Shop Now</a>
+      </div>
+    </div>`;
+  dotsContainer.innerHTML = '';
+}
+function slideHtml(b) {
+  const eyebrow = b.eyebrow ? String(b.eyebrow).trim() : '';
+  return `
+    <div class="slide-bg" style="background-image:url('${escapeHtml(normaliseImageUrl(b.imageUrl || b.image || '') || '')}')"></div>
+    <div class="slide-overlay"></div>
+    <div class="slide-content">
+      ${eyebrow ? `<span class="eyebrow">${escapeHtml(eyebrow)}</span>` : ''}
+      ${b.title ? `<h1>${escapeHtml(b.title)}</h1>` : ''}
+      ${b.subtitle ? `<p>${escapeHtml(b.subtitle)}</p>` : ''}
+      ${(b.ctaText || b.link) ? `<a href="${escapeHtml(b.link || '#trending')}" class="btn btn-primary">${escapeHtml(b.ctaText || 'Shop Now')}</a>` : ''}
+    </div>`;
+}
+function renderCarousel() {
+  track.innerHTML = ''; dotsContainer.innerHTML = '';
+  if (!banners.length) { renderFallbackBanner(); return; }
+  realCount = banners.length;
+  let sequence;
+  if (realCount === 1) {
+    sequence = [...banners]; currentSlide = 0;
+    track.style.transition = 'none'; track.style.transform = 'translateX(0%)';
+  } else {
+    sequence = [banners[realCount - 1], ...banners, banners[0]];
+    currentSlide = 1;
+    track.style.transition = 'none'; track.style.transform = 'translateX(-100%)';
+  }
+  sequence.forEach((b, i) => {
+    const s = document.createElement('div');
+    s.className = 'carousel-slide' + (i === currentSlide ? ' active' : '');
+    s.innerHTML = slideHtml(b);
+    track.appendChild(s);
+  });
+  banners.forEach((b, i) => {
+    const dot = document.createElement('button');
+    dot.className = 'dot' + (i === 0 ? ' active' : '');
+    dot.setAttribute('aria-label', `Slide ${i + 1} of ${realCount}`);
+    dot.onclick = () => { stopCarousel(); goToReal(i); startCarousel(); };
+    dotsContainer.appendChild(dot);
+  });
+}
+function setActiveSlide(domIndex) {
+  document.querySelectorAll('.carousel-slide').forEach((s, i) => s.classList.toggle('active', i === domIndex));
+  const dotIndex = realIndexFromDom(domIndex);
+  document.querySelectorAll('.dot').forEach((d, i) => d.classList.toggle('active', i === dotIndex));
+}
+function realIndexFromDom(domIndex) {
+  if (realCount <= 1) return 0;
+  let r = domIndex - 1;
+  if (r < 0) r = realCount - 1;
+  if (r >= realCount) r = 0;
+  return r;
+}
+function goToReal(realIdx) { if (realCount <= 1) return; goToDom(realIdx + 1); }
+function goToDom(domIdx) {
+  if (isTransitioning || realCount <= 1) return;
+  isTransitioning = true;
+  track.style.transition = 'transform .7s cubic-bezier(.22,1,.36,1)';
+  track.style.transform = `translateX(-${domIdx * 100}%)`;
+  currentSlide = domIdx;
+  setActiveSlide(domIdx);
+  setTimeout(() => {
+    isTransitioning = false;
+    if (domIdx === realCount + 1) {
+      track.style.transition = 'none'; track.style.transform = 'translateX(-100%)';
+      currentSlide = 1; setActiveSlide(1); void track.offsetWidth;
+    } else if (domIdx === 0) {
+      track.style.transition = 'none'; track.style.transform = `translateX(-${realCount * 100}%)`;
+      currentSlide = realCount; setActiveSlide(realCount); void track.offsetWidth;
+    }
+  }, 720);
+}
+function startCarousel() {
+  if (prefersReducedMotion || realCount < 2) return;
+  stopCarousel();
+  carouselInterval = setInterval(() => goToDom(currentSlide + 1), 5000);
+}
+function stopCarousel() { clearInterval(carouselInterval); }
+
+let touchStartX = null;
+carouselEl.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; stopCarousel(); }, { passive: true });
+carouselEl.addEventListener('touchend', e => {
+  if (touchStartX == null) return;
+  const dx = e.changedTouches[0].clientX - touchStartX;
+  if (Math.abs(dx) > 40 && realCount > 1) {
+    if (dx < 0) goToDom(currentSlide + 1); else goToDom(currentSlide - 1);
+  }
+  touchStartX = null; startCarousel();
+}, { passive: true });
+carouselEl.addEventListener('mouseenter', stopCarousel);
+carouselEl.addEventListener('mouseleave', () => { if (realCount > 1) startCarousel(); });
+
+/* ---------- search ---------- */
+const searchInput = document.getElementById('search-input');
+const searchClear = document.getElementById('search-clear');
+const dropdown = document.getElementById('search-dropdown');
+const placeholders = ["Explore rings & bracelets…","Find stylish handbags…","Search earrings…","Discover fashion accessories…","Search categories & products…"];
+let phIndex = 0, isFocused = false;
+function cyclePlaceholder() {
+  if (isFocused || searchInput.value) return;
+  searchInput.style.opacity = '0';
+  setTimeout(() => { searchInput.placeholder = placeholders[phIndex]; searchInput.style.opacity = '1'; phIndex = (phIndex + 1) % placeholders.length; }, 280);
+}
+if (!prefersReducedMotion) setInterval(cyclePlaceholder, 3200);
+searchInput.addEventListener('focus', () => { isFocused = true; searchInput.style.opacity = '1'; });
+searchInput.addEventListener('blur', () => { isFocused = false; if (!searchInput.value) cyclePlaceholder(); });
+
+function rebuildSearchIndex() {
+  searchIndex = [
+    ...products.map(p => ({ type: 'product', id: p.id, name: p.name, price: p.price, image: p.image })),
+    ...categories.map(c => ({ type: 'category', id: c.id, name: c.name })),
+    ...subcategories.map(s => ({ type: 'subcategory', id: s.id, categoryId: s.categoryId, name: s.name }))
+  ];
+}
+
+let searchTimer;
+searchInput.addEventListener('input', () => {
+  const val = searchInput.value.trim();
+  searchClear.classList.toggle('hidden', !val);
+  clearTimeout(searchTimer);
+  if (!val) { dropdown.classList.add('hidden'); return; }
+  searchTimer = setTimeout(() => runSearch(val), 220);
+});
+searchClear.onclick = () => { searchInput.value = ''; searchClear.classList.add('hidden'); dropdown.classList.add('hidden'); searchInput.focus(); };
+
+function runSearch(val) {
+  const v = val.toLowerCase();
+  const results = searchIndex.filter(i => i.name.toLowerCase().includes(v)).slice(0, 6);
+  dropdown.innerHTML = '';
+  if (!results.length) dropdown.innerHTML = '<div class="search-empty">No matching products or categories</div>';
+  else {
+    results.forEach(r => {
+      const div = document.createElement('div');
+      div.className = 'search-item';
+      if (r.type === 'product') {
+        div.innerHTML = `<img src="${escapeHtml(normaliseImageUrl(r.image) || '')}" alt="" onerror="this.style.display='none';"><div><div class="search-item-name">${escapeHtml(r.name)}</div><div class="search-item-meta">${formatPrice(r.price)}</div></div>`;
+        div.onclick = () => window.location.href = `product.html?id=${encodeURIComponent(r.id)}`;
+      } else if (r.type === 'category') {
+        div.innerHTML = `<div class="search-item-cat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></div><div><div class="search-item-name">${escapeHtml(r.name)}</div><div class="search-item-meta">Category</div></div>`;
+        div.onclick = () => {
+          dropdown.classList.add('hidden');
+          document.getElementById('categories').scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+          activateCategory(r.id, null, { scroll: true });
+        };
+      } else {
+        div.innerHTML = `<div class="search-item-cat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="6 9 12 15 18 9"/></svg></div><div><div class="search-item-name">${escapeHtml(r.name)}</div><div class="search-item-meta">Subcategory</div></div>`;
+        div.onclick = () => {
+          dropdown.classList.add('hidden');
+          document.getElementById('categories').scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+          activateCategory(r.categoryId, r.id, { scroll: true });
+        };
+      }
+      dropdown.appendChild(div);
+    });
+  }
+  dropdown.classList.remove('hidden');
+}
+document.addEventListener('click', (e) => { if (!e.target.closest('.search-container')) dropdown.classList.add('hidden'); });
+
+(async () => { await loadData(); await loadBanners(); })();
+</script>
+</body>
+</html>

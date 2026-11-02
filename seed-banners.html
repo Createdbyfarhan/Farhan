@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seed Banners | PrettyPick (admin only)</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="navbar pp-header">
+  <div class="nav-container" id="pp-nav-root"></div>
+</header>
+<main class="section-container" style="max-width:800px;">
+  <h1>Seed Default Banners</h1>
+  <p style="color:var(--text-muted);margin:12px 0 20px;">One-time setup. Creates 4 banners in Firestore if the collection is empty. Sign in as a verified admin first.</p>
+  <button class="btn btn-primary" id="seed-btn">Create 4 Default Banners</button>
+  <div id="msg" style="margin-top:16px;font-size:14px;"></div>
+</main>
+<footer id="pp-footer-root"></footer>
+<script type="module">
+import { auth, db } from './firebase-config.js';
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+import { collection, getDocs, addDoc, doc, getDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+const msg = document.getElementById('msg');
+const BANNERS = [
+  {
+    title: 'Timeless Elegance',
+    subtitle: 'Discover curated accessories that elevate every moment.',
+    ctaText: 'Explore Categories',
+    link: 'index.html#categories',
+    order: 1,
+    active: true,
+    imageUrl: ''
+  },
+  {
+    title: 'Trending This Season',
+    subtitle: 'Bold silhouettes and polished finishes for everyday wear.',
+    ctaText: 'Shop Trending',
+    link: 'index.html#trending',
+    order: 2,
+    active: true,
+    imageUrl: ''
+  },
+  {
+    title: 'Your Personal Edit',
+    subtitle: 'Save favourites and revisit them anytime.',
+    ctaText: 'View Wishlist',
+    link: 'wishlist.html',
+    order: 3,
+    active: true,
+    imageUrl: ''
+  },
+  {
+    title: 'Ready When You Are',
+    subtitle: 'Review your selections and check out with confidence.',
+    ctaText: 'Go to Cart',
+    link: 'cart.html',
+    order: 4,
+    active: true,
+    imageUrl: ''
+  }
+];
+
+onAuthStateChanged(auth, async (u) => {
+  if (!u) { msg.innerHTML = '<span style="color:#dc2626;">Sign in as admin first. <a href="login.html">Login</a></span>'; return; }
+  if (!u.emailVerified) { msg.innerHTML = '<span style="color:#dc2626;">Verify your email first.</span>'; return; }
+  try {
+    const snap = await getDoc(doc(db, 'users', u.uid));
+    if (!snap.exists() || snap.data().role !== 'admin') {
+      msg.innerHTML = '<span style="color:#dc2626;">This account is not an admin.</span>'; return;
+    }
+    msg.innerHTML = 'Signed in as admin. Ready to seed.';
+  } catch (e) { msg.textContent = 'Could not verify admin: ' + e.message; }
+});
+
+document.getElementById('seed-btn').onclick = async () => {
+  const user = auth.currentUser;
+  if (!user) { msg.textContent = 'Sign in first.'; return; }
+  msg.textContent = 'Seeding…';
+  try {
+    const existing = await getDocs(collection(db, 'banners'));
+    if (!existing.empty) {
+      msg.textContent = `Banners collection already has ${existing.size} entry/entries. Aborting to avoid duplicates.`;
+      return;
+    }
+    for (const b of BANNERS) {
+      await addDoc(collection(db, 'banners'), { ...b, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    }
+    msg.innerHTML = '<span style="color:green;">Created 4 banners. Visit <a href="index.html">home</a> to view the carousel.</span>';
+  } catch (e) {
+    msg.innerHTML = `<span style="color:#dc2626;">Seed failed: ${e.code || e.message}</span>`;
+  }
+};
+</script>
+</body>
+</html>

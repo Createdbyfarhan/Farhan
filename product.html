@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Product Details | PrettyPick</title>
+<link rel="stylesheet" href="styles.css">
+<script src="shared.js"></script>
+</head>
+<body>
+<header class="navbar pp-header">
+  <div class="nav-container" id="pp-nav-root"></div>
+</header>
+
+<main class="section-container" id="product-container">
+  <p style="text-align:center;color:var(--text-muted);padding:60px 0;">Loading product…</p>
+</main>
+
+<footer id="pp-footer-root"></footer>
+
+<script type="module">
+import { auth, db } from './firebase-config.js';
+import { collection, getDocs, query, where, limit, addDoc, doc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+
+const container = document.getElementById('product-container');
+const params = new URLSearchParams(window.location.search);
+const productId = params.get('id');
+
+let currentUser = null;
+let currentProduct = null;
+
+onAuthStateChanged(auth, (user) => {
+  currentUser = user;
+  const submitBtn = document.getElementById('review-submit-btn');
+  const loginPrompt = document.getElementById('review-login-prompt');
+  const form = document.getElementById('review-form');
+  if (submitBtn && loginPrompt && form) {
+    if (user) {
+      submitBtn.style.display = '';
+      loginPrompt.style.display = 'none';
+      form.style.display = '';
+    } else {
+      submitBtn.style.display = 'none';
+      loginPrompt.style.display = '';
+      form.style.display = 'none';
+    }
+  }
+});
+
+if (!productId) {
+  container.innerHTML = '<div style="text-align:center;padding:100px 20px;"><h2>No product specified</h2><a href="index.html" class="btn btn-primary" style="margin-top:20px;">Back to Home</a></div>';
+} else {
+  loadProduct(productId);
+}
+
+async function loadProduct(id) {
+  try {
+    const snap = await getDocs(query(collection(db, 'products'), where('active', '==', true)));
+    window.__PP_CACHE.products = snap.docs.map(normalizeProduct);
+    window.__PP_CACHE.ready = true;
+    const product = window.__PP_CACHE.products.find(p => p.id === id);
+    if (!product) {
+      container.innerHTML = '<div style="text-align:center;padding:100px 20px;"><h2>Product not found or unavailable</h2><a href="index.html" class="btn btn-primary" style="margin-top:20px;">Back to Home</a></div>';
+      return;
+    }
+    currentProduct = product;
+    renderProduct(product);
+  } catch (err) {
+    console.error(err);
+    container.innerHTML = '<p style="color:#dc2626;text-align:center;padding:60px;">Failed to load product.</p>';
+  }
+}
+
+function renderProduct(product) {
+  const isWished = getWishlist().includes(product.id);
+  const discount = (product.oldPrice && product.oldPrice > product.price)
+    ? Math.round(((product.oldPrice - product.price) / product.oldPrice) * 100) : 0;
+  const gallery = getUniqueProductImages(product);
+  const mainImg = gallery[0] || '';
+  const fallback = "data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22400%22><rect width=%22400%22 height=%22400%22 fill=%22%23F8F3EA%22/><text x=%22200%22 y=%22210%22 text-anchor=%22middle%22 font-family=%22sans-serif%22 font-size=%2216%22 fill=%22%2377736B%22>No image</text></svg>";
+  const isOut = product.stock <= 0;
+
+  container.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr;gap:32px;" id="product-grid">
+      <div style="min-width:0;">
+        <div style="background:var(--white);padding:16px;border-radius:var(--radius-lg);border:1px solid var(--border);">
+          <img id="main-image" src="${escapeHtml(mainImg || fallback)}" alt="${escapeHtml(product.name)}" style="width:100%;border-radius:var(--radius-md);object-fit:contain;max-height:520px;" onerror="this.onerror=null;this.src='${fallback}'">
+        </div>
+        ${gallery.length > 1 ? `<div class="product-gallery-strip" style="display:flex;gap:8px;margin-top:12px;overflow-x:auto;">${gallery.map((src, idx) =>
+          `<button type="button" class="product-thumb ${idx === 0 ? 'active' : ''}" style="border:1px solid var(--border);border-radius:8px;overflow:hidden;padding:0;background:none;width:64px;height:64px;flex-shrink:0;"
+            onclick="document.getElementById('main-image').src='${escapeHtml(src)}'; document.querySelectorAll('.product-thumb').forEach(t=>t.classList.remove('active')); this.classList.add('active');">
+            <img src="${escapeHtml(src)}" alt="${escapeHtml(product.name)} thumbnail ${idx + 1}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">
+          </button>`).join('')}</div>` : ''}
+      </div>
+      <div style="min-width:0;">
+        <p style="color:var(--text-muted);font-size:14px;margin-bottom:8px;">${escapeHtml(product.categoryName || '')}</p>
+        <h1 style="font-size:clamp(22px,3vw,32px);margin-bottom:16px;word-break:break-word;">${escapeHtml(product.name)}</h1>
+        <div id="product-avg-rating" style="margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="color:var(--text-muted);font-weight:500;font-size:13px;">Loading rating…</span>
+        </div>
+        <div style="font-size:22px;font-weight:700;color:var(--gold);margin-bottom:22px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+          <span>${formatPrice(product.price)}</span>
+          ${product.oldPrice ? `<span style="font-size:15px;color:var(--text-muted);text-decoration:line-through;">${formatPrice(product.oldPrice)}</span>` : ''}
+          ${discount > 0 ? `<span style="background:var(--gold);color:#fff;font-size:12px;padding:4px 8px;border-radius:4px;">-${discount}%</span>` : ''}
+        </div>
+        <p style="color:var(--text-muted);line-height:1.7;margin-bottom:26px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(product.description || 'No description available.')}</p>
+
+        <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
+          <button class="btn btn-primary" style="flex:1 1 200px;background:var(--gold);color:#fff;" id="buy-now-btn" ${isOut ? 'disabled' : ''}>
+            ${isOut ? 'Out of Stock' : 'Buy Now'}
+          </button>
+          <button class="btn btn-outline" style="flex:1 1 160px;" id="add-btn" ${isOut ? 'disabled' : ''}>
+            ${isOut ? 'Out of Stock' : 'Add to Cart'}
+          </button>
+          <button class="btn btn-outline" style="flex:1 1 140px;" id="wishlist-btn">
+            ${isWished ? '♥ Wishlisted' : '♡ Wishlist'}
+          </button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:26px;flex-wrap:wrap;">
+          <label style="font-size:13px;color:var(--text-muted);font-weight:600;">Quantity:</label>
+          <button type="button" class="btn btn-outline btn-sm" style="padding:4px 12px;min-width:38px;" id="pp-qty-minus">−</button>
+          <span id="pp-qty-display" style="font-weight:600;min-width:28px;text-align:center;font-size:16px;">1</span>
+          <button type="button" class="btn btn-outline btn-sm" style="padding:4px 12px;min-width:38px;" id="pp-qty-plus">+</button>
+          <span style="font-size:12.5px;color:var(--text-muted);">(${product.stock} available)</span>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:18px;">
+          <h3 style="margin-bottom:8px;">Stock Status</h3>
+          <p style="color:${product.stock > 0 ? 'green' : '#dc2626'};font-weight:600;">
+            ${product.stock > 0 ? `In Stock (${product.stock} available)` : 'Out of Stock'}
+          </p>
+          ${product.freeShipping ? '<p style="color:var(--success);font-weight:600;margin-top:6px;">✓ Free Shipping</p>' : ''}
+          ${product.shippingCharge > 0 && !product.freeShipping ? `<p style="color:var(--text-muted);font-size:13px;margin-top:6px;">Shipping: ${formatPrice(product.shippingCharge)} per unit</p>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:48px;">
+      <h2 style="margin-bottom:16px;">Customer Reviews</h2>
+
+      <div id="review-write-card" class="admin-main" style="margin-bottom:22px;padding:20px;display:none;">
+        <h3 style="font-family:var(--font-serif);font-size:20px;margin-bottom:12px;">Write a review</h3>
+        <div id="review-login-prompt" style="display:none;">
+          <p style="color:var(--text-muted);margin-bottom:12px;">Please <a href="login.html" style="color:var(--gold);font-weight:600;">sign in</a> to leave a review.</p>
+        </div>
+        <form id="review-form" style="display:none;" novalidate>
+          <div class="dash-form-group">
+            <label>Rating</label>
+            <div id="review-stars" style="display:flex;gap:6px;font-size:24px;cursor:pointer;user-select:none;">
+              ${[1,2,3,4,5].map(n => `<span data-star="${n}" class="review-star" style="color:#C9C0B0;transition:color .12s;">★</span>`).join('')}
+            </div>
+          </div>
+          <div class="dash-form-group"><label>Headline</label><input id="review-title" maxlength="120" placeholder="Short headline" required></div>
+          <div class="dash-form-group"><label>Your review</label><textarea id="review-comment" rows="4" maxlength="2000" placeholder="What did you think of this product?" required></textarea></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <button type="submit" class="btn btn-primary" id="review-submit-btn">Submit Review</button>
+            <small style="color:var(--text-muted);font-size:12px;">Your review will appear after admin approval.</small>
+          </div>
+          <div id="review-form-msg" style="margin-top:10px;font-size:14px;"></div>
+        </form>
+      </div>
+
+      <div id="my-review-status" style="display:none;margin-bottom:22px;"></div>
+
+      <div id="reviews-section" style="background:var(--cream);padding:18px;border-radius:var(--radius-md);">
+        <p style="color:var(--text-muted);">Loading reviews…</p>
+      </div>
+    </div>`;
+
+  if (window.innerWidth > 768) {
+    document.getElementById('product-grid').style.gridTemplateColumns = 'minmax(0,1fr) minmax(0,1fr)';
+  }
+
+  /* ---- Quantity state + handlers ---- */
+  let selectedQty = 1;
+  const qtyDisplay = document.getElementById('pp-qty-display');
+  const qtyMinus = document.getElementById('pp-qty-minus');
+  const qtyPlus = document.getElementById('pp-qty-plus');
+  const maxQty = Math.max(1, product.stock);
+
+  function paintQty() {
+    if (qtyDisplay) qtyDisplay.textContent = selectedQty;
+    if (qtyMinus) qtyMinus.disabled = selectedQty <= 1;
+    if (qtyPlus) qtyPlus.disabled = selectedQty >= maxQty;
+  }
+  if (qtyMinus) qtyMinus.onclick = () => { selectedQty = Math.max(1, selectedQty - 1); paintQty(); };
+  if (qtyPlus) qtyPlus.onclick = () => { selectedQty = Math.min(maxQty, selectedQty + 1); paintQty(); };
+  paintQty();
+
+  /* ---- Buy Now: go to checkout with product + qty ---- */
+  const buyBtn = document.getElementById('buy-now-btn');
+  if (buyBtn) {
+    buyBtn.onclick = () => {
+      if (product.stock <= 0) { showToast('Out of stock', 'warning'); return; }
+      window.location.href = `checkout.html?buyNow=${encodeURIComponent(product.id)}&qty=${selectedQty}`;
+    };
+  }
+
+  /* ---- Add to Cart (preserved) ---- */
+  const addBtn = document.getElementById('add-btn');
+  if (addBtn) {
+    addBtn.onclick = () => {
+      if (product.stock <= 0) return;
+      const cart = getCart();
+      const existing = cart.find(i => i.id === product.id);
+      if (existing) {
+        const newQty = Math.min(existing.qty + selectedQty, product.stock);
+        if (newQty === existing.qty) { showToast('Stock limit reached', 'warning'); return; }
+        existing.qty = newQty;
+      } else {
+        cart.push({ id: product.id, qty: Math.min(selectedQty, product.stock) });
+      }
+      saveCart(cart);
+      showToast('Added to cart', 'success');
+    };
+  }
+
+  /* ---- Wishlist (preserved) ---- */
+  const wishBtn = document.getElementById('wishlist-btn');
+  if (wishBtn) {
+    wishBtn.onclick = function () {
+      let w = getWishlist();
+      if (w.includes(product.id)) {
+        w = w.filter(x => x !== product.id);
+        this.textContent = '♡ Wishlist';
+        showToast('Removed from wishlist', 'info');
+      } else {
+        w.push(product.id);
+        this.textContent = '♥ Wishlisted';
+        showToast('Added to wishlist', 'success');
+      }
+      saveWishlist(w);
+    };
+  }
+
+  wireReviewForm(product);
+  loadReviews(product.id);
+}
+
+function wireReviewForm(product) {
+  const writeCard = document.getElementById('review-write-card');
+  const loginPrompt = document.getElementById('review-login-prompt');
+  const form = document.getElementById('review-form');
+  const submitBtn = document.getElementById('review-submit-btn');
+
+  if (!writeCard || !form) return;
+  writeCard.style.display = '';
+
+  if (!currentUser) {
+    loginPrompt.style.display = '';
+    form.style.display = 'none';
+    return;
+  }
+  loginPrompt.style.display = 'none';
+  form.style.display = '';
+
+  let selectedRating = 0;
+  const starEls = [...document.querySelectorAll('#review-stars .review-star')];
+  function paintStars() {
+    starEls.forEach((el, idx) => {
+      el.style.color = (idx < selectedRating) ? 'var(--gold)' : '#C9C0B0';
+    });
+  }
+  starEls.forEach(el => {
+    el.addEventListener('mouseenter', () => {
+      const n = Number(el.dataset.star);
+      starEls.forEach((s, i) => s.style.color = (i < n) ? 'var(--gold)' : '#C9C0B0');
+    });
+    el.addEventListener('mouseleave', paintStars);
+    el.addEventListener('click', () => {
+      selectedRating = Number(el.dataset.star);
+      paintStars();
+    });
+  });
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('review-form-msg');
+    msg.textContent = ''; msg.style.color = '';
+
+    const headline = document.getElementById('review-title').value.trim();
+    const comment = document.getElementById('review-comment').value.trim();
+
+    if (!selectedRating) { msg.textContent = 'Please choose a star rating.'; msg.style.color = '#dc2626'; showToast('Please choose a star rating', 'warning'); return; }
+    if (!headline) { msg.textContent = 'Please enter a headline.'; msg.style.color = '#dc2626'; showToast('Headline required', 'warning'); return; }
+    if (comment.length < 5) { msg.textContent = 'Review is too short.'; msg.style.color = '#dc2626'; showToast('Review is too short', 'warning'); return; }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting…';
+
+    try {
+      const reviewKey = `${product.id}_${currentUser.uid}`;
+      const q = query(
+        collection(db, 'reviews'),
+        where('productId', '==', product.id),
+        where('userId', '==', currentUser.uid),
+        limit(1)
+      );
+      const existing = await getDocs(q);
+
+      const payload = {
+        productId: product.id,
+        productName: product.name,
+        userId: currentUser.uid,
+        userName: currentUser.displayName || (currentUser.email || '').split('@')[0] || 'Customer',
+        rating: selectedRating,
+        headline,
+        title: headline,
+        comment,
+        status: 'pending',
+        reviewKey,
+        updatedAt: serverTimestamp()
+      };
+
+      if (!existing.empty) {
+        await updateDoc(doc(db, 'reviews', existing.docs[0].id), payload);
+      } else {
+        await addDoc(collection(db, 'reviews'), { ...payload, createdAt: serverTimestamp() });
+      }
+
+      showToast('Thank you! Your review has been submitted successfully.', 'success', { duration: 4200 });
+      msg.textContent = '✓ Submitted. It will appear after admin approval.';
+      msg.style.color = 'var(--success)';
+      document.getElementById('review-title').value = '';
+      document.getElementById('review-comment').value = '';
+      selectedRating = 0; paintStars();
+
+      loadReviews(product.id);
+    } catch (err) {
+      console.error(err);
+      msg.textContent = err.code === 'permission-denied'
+        ? 'Submission blocked by security rules.'
+        : 'Submission failed: ' + (err.message || 'unknown');
+      msg.style.color = '#dc2626';
+      showToast('Failed to submit review. Please try again.', 'error');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Review';
+    }
+  };
+}
+
+async function loadReviews(pid) {
+  const el = document.getElementById('reviews-section');
+  const statusEl = document.getElementById('my-review-status');
+  const avgEl = document.getElementById('product-avg-rating');
+  if (!el) return;
+
+  try {
+    const snap = await getDocs(query(collection(db, 'reviews'), where('productId', '==', pid), limit(200)));
+    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    const approved = all.filter(r => r.status === 'approved');
+
+    if (avgEl) {
+      if (approved.length) {
+        const avg = averageRating(approved);
+        avgEl.innerHTML = `
+          <span style="display:inline-flex;gap:2px;color:var(--gold);">${renderStars(avg)}</span>
+          <span style="font-weight:600;color:var(--ink);">${avg.toFixed(1)}</span>
+          <span style="color:var(--text-muted);font-size:13px;">(${approved.length} review${approved.length === 1 ? '' : 's'})</span>`;
+      } else {
+        avgEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No approved reviews yet.</span>';
+      }
+    }
+
+    if (statusEl && currentUser) {
+      const mine = all.find(r => r.userId === currentUser.uid);
+      if (mine && mine.status !== 'rejected') {
+        const colorMap = { pending: '#C98B21', approved: 'var(--success)' };
+        const c = colorMap[mine.status] || 'var(--text-muted)';
+        const label = mine.status === 'pending' ? 'Pending approval' : 'Published';
+        statusEl.style.display = '';
+        statusEl.innerHTML = `
+          <div style="background:var(--white);border:1px solid var(--border);border-left:4px solid ${c};border-radius:var(--radius-md);padding:14px;">
+            <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:14px;">Your Review</strong>
+              <span style="color:${c};font-weight:700;font-size:12.5px;">${escapeHtml(label)}</span>
+            </div>
+            <div style="margin-top:6px;color:var(--gold);">${renderStars(mine.rating)}</div>
+            <div style="font-weight:600;margin-top:4px;">${escapeHtml(mine.headline || mine.title || '')}</div>
+            <p style="font-size:13px;color:var(--text-muted);margin-top:4px;white-space:pre-wrap;">${escapeHtml(mine.comment || '')}</p>
+          </div>`;
+      } else {
+        statusEl.style.display = 'none';
+        statusEl.innerHTML = '';
+      }
+    }
+
+    if (!approved.length) {
+      el.innerHTML = '<p style="color:var(--text-muted);margin:0;">No approved reviews yet. Be the first to review this product.</p>';
+      return;
+    }
+    el.innerHTML = approved
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      .map(r => {
+        const when = r.createdAt?.toDate ? r.createdAt.toDate().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+        return `
+        <div style="text-align:left;padding:14px 0;border-bottom:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <strong>${escapeHtml(r.userName || 'Customer')}</strong>
+            <span style="color:var(--gold);">${renderStars(r.rating)}</span>
+            ${when ? `<span style="color:var(--text-soft);font-size:12px;margin-left:auto;">${escapeHtml(when)}</span>` : ''}
+          </div>
+          <div style="font-weight:600;margin-top:4px;">${escapeHtml(r.headline || r.title || '')}</div>
+          <p style="margin-top:6px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word;">${escapeHtml(r.comment || '')}</p>
+        </div>`;
+      }).join('');
+  } catch (err) {
+    console.error(err);
+    el.innerHTML = '<p style="color:#dc2626;">Reviews unavailable.</p>';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Checkout | PrettyPick</title>
+<link rel="stylesheet" href="styles.css">
+<script src="shared.js"></script>
+</head>
+<body>
+<header class="navbar">
+  <div class="nav-container">
+    <div class="nav-left"><a href="index.html"><img src="logo.png" alt="PrettyPick" id="brand-logo"></a></div>
+    <div class="nav-right">
+      <a href="cart.html" class="icon-btn badge-container" aria-label="Cart">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+        <span class="badge badge-cart">0</span>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main class="section-container" style="max-width:900px;">
+  <h1 style="margin-bottom:22px;">Checkout</h1>
+  <div id="checkout-body"><p style="text-align:center;color:var(--text-muted);padding:40px;">Loading…</p></div>
+</main>
+
+<script type="module">
+import { auth, db } from './firebase-config.js';
+import {
+  collection, getDocs, query, where, doc, getDoc,
+  serverTimestamp, addDoc, limit
+} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+
+const WHATSAPP_NUMBER = '918849668317';
+const CHECKOUT_DRAFT_KEY = 'pp_checkout_draft_v1';
+
+let currentUser = null;
+let profile = {};
+let cartProducts = [];
+let appliedCoupon = getAppliedCoupon();
+let globalShipping = { shippingCharge: 0, freeShippingThreshold: 0 };
+let checkoutItems = [];
+let isBuyNowFlow = false;
+let isSubmitting = false;
+
+// Save checkout form data to sessionStorage
+function saveCheckoutDraft() {
+  try {
+    const draft = {
+      name: document.getElementById('ship-name')?.value || '',
+      phone: document.getElementById('ship-phone')?.value || '',
+      line1: document.getElementById('ship-line1')?.value || '',
+      city: document.getElementById('ship-city')?.value || '',
+      postal: document.getElementById('ship-postal')?.value || '',
+      country: document.getElementById('ship-country')?.value || '',
+      timestamp: Date.now()
+    };
+    sessionStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(draft));
+  } catch (e) { console.warn('Failed to save checkout draft', e); }
+}
+
+// Load checkout form data from sessionStorage
+function loadCheckoutDraft() {
+  try {
+    const raw = sessionStorage.getItem(CHECKOUT_DRAFT_KEY);
+    if (!raw) return null;
+    const draft = JSON.parse(raw);
+    // Expire after 1 hour
+    if (draft.timestamp && Date.now() - draft.timestamp > 3600000) {
+      sessionStorage.removeItem(CHECKOUT_DRAFT_KEY);
+      return null;
+    }
+    return draft;
+  } catch (e) { return null; }
+}
+
+// Clear checkout draft after order placed
+function clearCheckoutDraft() {
+  sessionStorage.removeItem(CHECKOUT_DRAFT_KEY);
+}
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) {
+    // Save current cart state and redirect info
+    const buyNowParams = new URLSearchParams(location.search);
+    const redirectUrl = 'checkout.html' + (buyNowParams.toString() ? '?' + buyNowParams.toString() : '');
+    sessionStorage.setItem('pp_redirect', redirectUrl);
+    // Also save checkout draft if form exists
+    if (document.getElementById('ship-name')) {
+      saveCheckoutDraft();
+    }
+    window.location.href = 'login.html';
+    return;
+  }
+  currentUser = user;
+  try {
+    const [s, settingsSnap] = await Promise.all([
+      getDoc(doc(db, 'users', user.uid)),
+      getDoc(doc(db, 'settings', 'shipping'))
+    ]);
+    profile = s.exists() ? s.data() : {};
+    if (settingsSnap.exists()) globalShipping = { ...globalShipping, ...settingsSnap.data() };
+  } catch (e) { console.error('Profile load failed', e); }
+  await loadCart();
+});
+
+async function loadCart() {
+  const body = document.getElementById('checkout-body');
+  const params = new URLSearchParams(location.search);
+  const buyNowId = params.get('buyNow');
+  const buyNowQty = parseInt(params.get('qty') || '1', 10);
+  isBuyNowFlow = !!buyNowId;
+
+  const cart = isBuyNowFlow
+    ? [{ id: buyNowId, qty: Math.max(1, buyNowQty) }]
+    : getCart();
+
+  if (!cart.length) {
+    body.innerHTML = '<div style="text-align:center;padding:36px;background:var(--white);border-radius:var(--radius-lg);border:1px solid var(--border);"><p style="color:var(--text-muted);">Your cart is empty.</p><a href="index.html" class="btn btn-primary" style="margin-top:14px;display:inline-block;">Continue Shopping</a></div>';
+    return;
+  }
+
+  try {
+    const snap = await getDocs(query(collection(db, 'products'), where('active', '==', true)));
+    cartProducts = snap.docs.map(normalizeProduct);
+    window.__PP_CACHE.products = cartProducts;
+    window.__PP_CACHE.ready = true;
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = '<p style="color:#dc2626;">Failed to load products. Please refresh.</p>';
+    return;
+  }
+
+  if (appliedCoupon && appliedCoupon.id) {
+    try {
+      const cSnap = await getDoc(doc(db, 'coupons', appliedCoupon.id));
+      if (!cSnap.exists() || cSnap.data().active === false) {
+        saveAppliedCoupon(null);
+        appliedCoupon = null;
+      } else {
+        appliedCoupon = { id: cSnap.id, ...cSnap.data() };
+        saveAppliedCoupon(appliedCoupon);
+      }
+    } catch (_) {
+      saveAppliedCoupon(null);
+      appliedCoupon = null;
+    }
+  }
+
+  renderCheckout();
+}
+
+function computeShipping(items, subtotal) {
+  let total = 0;
+  for (const it of items) {
+    const prod = cartProducts.find(p => p.id === it.productId);
+    if (!prod) continue;
+    if (prod.freeShipping) continue;
+    if (prod.shippingCharge != null && prod.shippingCharge >= 0) {
+      total += prod.shippingCharge * it.qty;
+    } else {
+      total += (globalShipping.shippingCharge || 0) * it.qty;
+    }
+  }
+  if (globalShipping.freeShippingThreshold > 0 && subtotal >= globalShipping.freeShippingThreshold) {
+    total = 0;
+  }
+  return total;
+}
+
+function renderCheckout() {
+  const body = document.getElementById('checkout-body');
+  const params = new URLSearchParams(location.search);
+  const cart = isBuyNowFlow
+    ? [{ id: params.get('buyNow'), qty: parseInt(params.get('qty') || '1', 10) }]
+    : getCart();
+
+  checkoutItems = [];
+  let subtotal = 0;
+  cart.forEach(item => {
+    const p = cartProducts.find(x => x.id === item.id);
+    if (!p) return;
+    const qty = Math.min(item.qty, Math.max(0, p.stock));
+    if (qty <= 0) return;
+    subtotal += p.price * qty;
+    checkoutItems.push({
+      productId: p.id,
+      name: p.name,
+      price: p.price,
+      qty,
+      image: p.image || '',
+      categoryName: p.categoryName || '',
+      subcategoryName: p.subcategoryName || ''
+    });
+  });
+
+  if (!checkoutItems.length) {
+    body.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:36px;">No valid items to checkout.</p>';
+    return;
+  }
+
+  const shipping = computeShipping(checkoutItems, subtotal);
+  let discount = 0;
+  if (appliedCoupon) {
+    discount = calculateCouponDiscount(appliedCoupon, subtotal);
+  }
+  const total = Math.max(0, subtotal + shipping - discount);
+
+  const productUrl = (id) =>
+    `${location.origin}${location.pathname.replace('checkout.html', 'product.html')}?id=${encodeURIComponent(id)}`;
+
+  // Load saved draft
+  const draft = loadCheckoutDraft() || {};
+
+  body.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr;gap:20px;">
+      <div style="background:var(--white);padding:22px;border-radius:var(--radius-lg);border:1px solid var(--border);">
+        <h2 style="margin-bottom:16px;font-family:var(--font-serif);font-size:20px;">Shipping Details</h2>
+        <div class="dash-form-group"><label>Full Name</label><input id="ship-name" value="${escapeHtml(draft.name || profile.name || currentUser.displayName || '')}" required maxlength="100"></div>
+        <div class="dash-form-group"><label>Phone</label><input id="ship-phone" value="${escapeHtml(draft.phone || profile.phone || '')}" placeholder="+91 98765 43210" required maxlength="20"></div>
+        <div class="dash-form-group"><label>Address Line 1</label><input id="ship-line1" value="${escapeHtml(draft.line1 || '')}" placeholder="123 Main St" required maxlength="200"></div>
+        <div class="dash-form-group"><label>City</label><input id="ship-city" value="${escapeHtml(draft.city || '')}" required maxlength="100"></div>
+        <div class="dash-form-group"><label>Postal Code</label><input id="ship-postal" value="${escapeHtml(draft.postal || '')}" required maxlength="20"></div>
+        <div class="dash-form-group"><label>Country</label><input id="ship-country" value="${escapeHtml(draft.country || 'India')}" required maxlength="100"></div>
+      </div>
+
+      <div style="background:var(--white);padding:22px;border-radius:var(--radius-lg);border:1px solid var(--border);">
+        <h2 style="margin-bottom:16px;font-family:var(--font-serif);font-size:20px;">Order Summary</h2>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          ${checkoutItems.map(i => `
+            <div style="display:flex;gap:12px;align-items:center;padding:10px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--ivory);">
+              <a href="${productUrl(i.productId)}" target="_blank" rel="noopener" style="flex-shrink:0;">
+                ${i.image ? `<img src="${escapeHtml(i.image)}" alt="${escapeHtml(i.name)}" style="width:64px;height:64px;object-fit:cover;border-radius:var(--r-sm);background:var(--cream);" onerror="this.style.visibility='hidden';">` : `<div style="width:64px;height:64px;border-radius:var(--r-sm);background:var(--cream);"></div>`}
+              </a>
+              <div style="flex:1;min-width:0;">
+                <a href="${productUrl(i.productId)}" target="_blank" rel="noopener" style="font-weight:600;font-size:14px;color:var(--ink);word-break:break-word;display:block;">${escapeHtml(i.name)}</a>
+                <div style="font-size:12.5px;color:var(--text-muted);margin-top:2px;">${formatPrice(i.price)} × ${i.qty}</div>
+              </div>
+              <div style="font-weight:700;color:var(--gold);font-size:14px;flex-shrink:0;text-align:right;">
+                ${formatPrice(i.price * i.qty)}
+              </div>
+            </div>`).join('')}
+        </div>
+
+        <div style="margin-top:16px;padding:16px;background:var(--cream-2);border-radius:var(--r-md);">
+          <label style="display:block;font-size:11px;font-weight:700;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);">Have a coupon?</label>
+          <div class="coupon-input-wrapper" style="display:flex;gap:10px;align-items:stretch;">
+            <input id="coupon-input" placeholder="ENTER CODE" value="${appliedCoupon ? escapeHtml(appliedCoupon.code) : ''}" ${appliedCoupon ? 'disabled' : ''} style="flex:1;min-height:44px;padding:12px 14px;border:1px solid var(--border-strong);border-radius:var(--r-sm);font-size:14px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;background:${appliedCoupon ? 'var(--cream)' : 'var(--white)'};color:${appliedCoupon ? 'var(--success)' : 'var(--ink)'};">
+            ${appliedCoupon
+              ? `<button class="btn btn-outline" id="coupon-remove-btn" style="min-height:44px;padding:0 18px;color:var(--danger);border-color:var(--danger);white-space:nowrap;">Remove</button>`
+              : `<button class="btn btn-primary" id="coupon-apply-btn" style="min-height:44px;padding:0 24px;white-space:nowrap;">Apply</button>`
+            }
+          </div>
+          <div id="coupon-msg" style="font-size:12.5px;margin-top:8px;color:${appliedCoupon ? 'var(--success)' : 'var(--text-muted)'};font-weight:500;">
+            ${appliedCoupon ? `✓ ${escapeHtml(appliedCoupon.code)} applied — saving ${formatPrice(discount)}` : 'Enter a valid coupon code'}
+          </div>
+        </div>
+
+        <div class="order-totals" style="margin-top:16px;">
+          <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;"><span>Subtotal</span><span>${formatPrice(subtotal)}</span></div>
+          ${discount > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;color:var(--success);"><span>Discount${appliedCoupon ? ` (${escapeHtml(appliedCoupon.code)})` : ''}</span><span>-${formatPrice(discount)}</span></div>` : ''}
+          <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;"><span style="color:var(--text-muted);">Shipping</span><span>${shipping === 0 ? 'Free' : formatPrice(shipping)}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:12px 0;font-size:20px;font-weight:700;color:var(--gold);border-top:1px solid var(--border);margin-top:8px;"><span>Total</span><span>${formatPrice(total)}</span></div>
+        </div>
+
+        <button class="btn btn-primary" style="width:100%;margin-top:18px;padding:14px;font-size:14px;" id="whatsapp-order-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="margin-right:6px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413"/></svg>
+          Order on WhatsApp
+        </button>
+        <div id="order-error" style="color:#dc2626;font-size:14px;margin-top:10px;text-align:center;"></div>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:10px;text-align:center;line-height:1.5;">
+          Your order will be created as <strong>pending</strong> and verified by admin after WhatsApp confirmation.
+        </p>
+      </div>
+    </div>`;
+
+  wireCouponHandlers(subtotal);
+  wireFormDraftPersistence();
+  document.getElementById('whatsapp-order-btn').onclick = () =>
+    placeOrderViaWhatsApp(subtotal, shipping, discount, total);
+}
+
+function wireFormDraftPersistence() {
+  const fields = ['ship-name', 'ship-phone', 'ship-line1', 'ship-city', 'ship-postal', 'ship-country'];
+  fields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', saveCheckoutDraft);
+      el.addEventListener('blur', saveCheckoutDraft);
+    }
+  });
+}
+
+function wireCouponHandlers(subtotal) {
+  const applyBtn = document.getElementById('coupon-apply-btn');
+  if (applyBtn) {
+    applyBtn.onclick = async () => {
+      const codeEl = document.getElementById('coupon-input');
+      const msgEl = document.getElementById('coupon-msg');
+      const code = (codeEl.value || '').trim().toUpperCase();
+      if (!code) {
+        msgEl.textContent = 'Please enter a coupon code.';
+        msgEl.style.color = '#dc2626';
+        showToast('Please enter a coupon code', 'warning');
+        return;
+      }
+      msgEl.textContent = 'Validating…';
+      msgEl.style.color = 'var(--text-muted)';
+      applyBtn.disabled = true;
+
+      // Save draft BEFORE any re-render
+      saveCheckoutDraft();
+
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'coupons'), where('code', '==', code), limit(1))
+        );
+        if (snap.empty) {
+          msgEl.textContent = 'Invalid coupon code.';
+          msgEl.style.color = '#dc2626';
+          showToast('Invalid coupon code', 'error');
+          applyBtn.disabled = false;
+          return;
+        }
+        const couponDoc = snap.docs[0];
+        const coupon = { id: couponDoc.id, ...couponDoc.data() };
+
+        const usageSnap = await getDocs(
+          query(
+            collection(db, 'couponUsages'),
+            where('couponId', '==', coupon.id),
+            where('userId', '==', currentUser.uid)
+          )
+        );
+        const userUsageCount = usageSnap.size;
+
+        const validation = validateCoupon(coupon, subtotal, userUsageCount);
+        if (!validation.valid) {
+          msgEl.textContent = validation.error;
+          msgEl.style.color = '#dc2626';
+          showToast(validation.error, 'error');
+          applyBtn.disabled = false;
+          return;
+        }
+
+        appliedCoupon = coupon;
+        saveAppliedCoupon(coupon);
+        showToast('Coupon applied!', 'success');
+        // Re-render (draft will be restored from sessionStorage)
+        renderCheckout();
+      } catch (err) {
+        console.error('Coupon validation failed:', err);
+        msgEl.textContent = 'Failed to validate coupon. Please try again.';
+        msgEl.style.color = '#dc2626';
+        showToast('Coupon validation failed', 'error');
+        applyBtn.disabled = false;
+      }
+    };
+  }
+
+  const removeBtn = document.getElementById('coupon-remove-btn');
+  if (removeBtn) {
+    removeBtn.onclick = () => {
+      saveCheckoutDraft(); // save before re-render
+      appliedCoupon = null;
+      saveAppliedCoupon(null);
+      showToast('Coupon removed', 'info');
+      renderCheckout();
+    };
+  }
+}
+
+async function placeOrderViaWhatsApp(subtotal, shipping, discount, total) {
+  if (isSubmitting) return;
+  const errEl = document.getElementById('order-error');
+  errEl.textContent = '';
+  errEl.innerHTML = '';
+
+  const addr = {
+    name: document.getElementById('ship-name').value.trim(),
+    phone: document.getElementById('ship-phone').value.trim(),
+    line1: document.getElementById('ship-line1').value.trim(),
+    city: document.getElementById('ship-city').value.trim(),
+    postal: document.getElementById('ship-postal').value.trim(),
+    country: document.getElementById('ship-country').value.trim()
+  };
+  for (const [k, v] of Object.entries(addr)) {
+    if (!v) {
+      const labels = { name: 'Name', phone: 'Phone', line1: 'Address', city: 'City', postal: 'Postal code', country: 'Country' };
+      errEl.textContent = `Please fill: ${labels[k] || k}`;
+      showToast(`Please fill: ${labels[k] || k}`, 'warning');
+      return;
+    }
+  }
+
+  const btn = document.getElementById('whatsapp-order-btn');
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="border-color:rgba(255,255,255,.4);border-top-color:#fff;"></span> Creating order…';
+  isSubmitting = true;
+
+  let orderId = null;
+  try {
+    // Duplicate prevention: check for existing pending WhatsApp order in last 5 minutes
+    const recentCheck = await getDocs(
+      query(
+        collection(db, 'orders'),
+        where('userId', '==', currentUser.uid),
+        where('orderStatus', '==', 'pending'),
+        where('channel', '==', 'whatsapp'),
+        limit(1)
+      )
+    );
+    if (!recentCheck.empty) {
+      const existingOrder = recentCheck.docs[0];
+      const createdAt = existingOrder.data().createdAt?.toDate?.();
+      if (createdAt && Date.now() - createdAt.getTime() < 300000) {
+        // Within 5 min — reuse existing order
+        orderId = existingOrder.id;
+        console.log('Reusing existing pending order:', orderId);
+      }
+    }
+
+    if (!orderId) {
+      const orderRef = doc(collection(db, 'orders'));
+      orderId = orderRef.id;
+
+      const orderData = {
+        userId: currentUser.uid,
+        userEmail: currentUser.email,
+        customerName: addr.name,
+        items: checkoutItems.map(i => ({
+          productId: i.productId,
+          name: i.name,
+          price: i.price,
+          qty: i.qty,
+          image: i.image,
+          categoryName: i.categoryName || '',
+          subcategoryName: i.subcategoryName || ''
+        })),
+        subtotal,
+        discountAmount: discount,
+        couponCode: appliedCoupon ? appliedCoupon.code : null,
+        couponId: appliedCoupon ? appliedCoupon.id : null,
+        shipping,
+        total,
+        shippingAddress: addr,
+        paymentMethod: 'whatsapp',
+        paymentStatus: 'unpaid',
+        orderStatus: 'pending',
+        channel: 'whatsapp',
+        stockDecremented: false,
+        stockRestored: false,
+        stockReserved: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      const created = await addDoc(collection(db, 'orders'), orderData);
+      orderId = created.id;
+    }
+
+    // Save order ID to sessionStorage for recovery
+    sessionStorage.setItem('pp_last_order_id', orderId);
+    sessionStorage.setItem('pp_whatsapp_return_pending', '1');
+  } catch (e) {
+    console.error('Order creation failed:', e);
+    errEl.textContent = e.code === 'permission-denied'
+      ? 'Order blocked by security rules. Please contact support.'
+      : 'Failed to create order request. Please try again.';
+    showToast('Failed to create order', 'error');
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+    isSubmitting = false;
+    return;
+  }
+
+  const productBase = `${location.origin}${location.pathname.replace('checkout.html', 'product.html')}`;
+  const lines = [];
+  lines.push('*New Order Request — PrettyPick*');
+  lines.push('');
+  lines.push('*Customer Details:*');
+  lines.push(`Name: ${addr.name}`);
+  lines.push(`Phone: ${addr.phone}`);
+  lines.push(`Address: ${addr.line1}, ${addr.city} - ${addr.postal}, ${addr.country}`);
+  lines.push('');
+  lines.push('*Order Details:*');
+  checkoutItems.forEach((it, idx) => {
+    const prodUrl = `${productBase}?id=${encodeURIComponent(it.productId)}`;
+    lines.push(`${idx + 1}. ${it.name}`);
+    lines.push(`   Price: ${formatPrice(it.price)} × ${it.qty} = ${formatPrice(it.price * it.qty)}`);
+    if (it.image) lines.push(`   Image: ${it.image}`);
+    lines.push(`   Link: ${prodUrl}`);
+  });
+  lines.push('');
+  if (appliedCoupon) {
+    lines.push(`Coupon Code: ${appliedCoupon.code}`);
+    lines.push(`Coupon Discount: -${formatPrice(discount)}`);
+  }
+  lines.push(`Shipping Charges: ${shipping === 0 ? 'Free' : formatPrice(shipping)}`);
+  lines.push(`*Final Order Total: ${formatPrice(total)}*`);
+  lines.push('');
+  lines.push(`Order Reference: ${orderId.slice(-8).toUpperCase()}`);
+  lines.push('');
+  lines.push('Thank you for choosing PrettyPick!');
+
+  const message = lines.join('\n');
+  const waUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+
+  const newWin = window.open(waUrl, '_blank');
+  if (!newWin || newWin.closed || typeof newWin.closed === 'undefined') {
+    errEl.innerHTML = `Popup blocked. Please allow popups or <a href="${waUrl}" target="_blank" rel="noopener" style="color:var(--gold);font-weight:600;">open WhatsApp manually</a>.`;
+    showToast('Please allow popups to open WhatsApp', 'warning');
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+    isSubmitting = false;
+    return;
+  }
+
+  // Clear cart & draft
+  if (!isBuyNowFlow) saveCart([]);
+  saveAppliedCoupon(null);
+  appliedCoupon = null;
+  clearCheckoutDraft();
+
+  // Navigate to order confirmation page
+  const confirmUrl = `order-confirmation.html?id=${encodeURIComponent(orderId)}`;
+  showToast('Order created! Send the WhatsApp message to confirm.', 'success', { duration: 3500 });
+  setTimeout(() => {
+    window.location.href = confirmUrl;
+  }, 800);
+
+  btn.disabled = false;
+  btn.innerHTML = originalHtml;
+  isSubmitting = false;
+}
+</script>
+</body>
+</html>

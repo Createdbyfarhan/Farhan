@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Wishlist | PrettyPick</title>
+<link rel="stylesheet" href="styles.css">
+<script src="shared.js"></script>
+</head>
+<body>
+<header class="navbar">
+  <div class="nav-container">
+    <div class="nav-left"><a href="index.html"><img src="logo.png" alt="PrettyPick" id="brand-logo"></a></div>
+    <div class="nav-right">
+      <a href="wishlist.html" class="icon-btn badge-container" aria-label="Wishlist">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        <span class="badge badge-wishlist">0</span>
+      </a>
+      <a href="cart.html" class="icon-btn badge-container" aria-label="Cart">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+        <span class="badge badge-cart">0</span>
+      </a>
+      <a href="account.html" class="icon-btn" aria-label="Account">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main class="section-container">
+  <h1 style="margin-bottom:10px;">My Wishlist</h1>
+  <p id="wishlist-count" style="color:var(--text-muted);margin-bottom:28px;"></p>
+  <div class="product-grid" id="wishlist-grid"><p style="grid-column:1/-1;text-align:center;color:var(--text-muted);">Loading…</p></div>
+</main>
+
+<script type="module">
+import { db } from './firebase-config.js';
+import { collection, getDocs, query, where } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+async function init() {
+  try {
+    const snap = await getDocs(query(collection(db, 'products'), where('active', '==', true)));
+    window.__PP_CACHE.products = snap.docs.map(normalizeProduct);
+    window.__PP_CACHE.ready = true;
+  } catch (e) { console.error(e); }
+
+  const grid = document.getElementById('wishlist-grid');
+  const countEl = document.getElementById('wishlist-count');
+  const wishlist = getWishlist();
+  const valid = wishlist.map(id => getProductById(id)).filter(Boolean);
+  countEl.textContent = `${valid.length} item(s) saved`;
+
+  if (!valid.length) {
+    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:50px 20px;background:var(--white);border-radius:var(--radius-lg);border:1px solid var(--border);">
+      <h2 style="margin-bottom:14px;">Your wishlist is empty</h2>
+      <p style="color:var(--text-muted);margin-bottom:22px;">Save your favourite items to view them later.</p>
+      <a href="index.html" class="btn btn-primary">Continue Shopping</a>
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = '';
+  valid.forEach(p => grid.appendChild(createProductCard(p)));
+}
+init();
+</script>
+</body>
+</html>

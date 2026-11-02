@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Order Confirmed | PrettyPick</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="shared.js"></script>
+<style>
+  .confirm-hero {
+    text-align: center;
+    padding: clamp(30px, 6vw, 60px) 20px clamp(24px, 4vw, 40px);
+    animation: confirmFadeUp .7s var(--ease) forwards;
+  }
+  @keyframes confirmFadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .checkmark-wrap {
+    width: 96px;
+    height: 96px;
+    margin: 0 auto 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #EAF6EE 0%, #D4F0DE 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    box-shadow: 0 12px 32px -12px rgba(46,125,79,.35);
+    animation: checkPop .55s cubic-bezier(.34,1.56,.64,1) .15s both;
+  }
+  @keyframes checkPop {
+    0% { transform: scale(.6); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .checkmark-wrap svg {
+    width: 46px;
+    height: 46px;
+    stroke: var(--success);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+  }
+  .checkmark-wrap svg path {
+    stroke-dasharray: 60;
+    stroke-dashoffset: 60;
+    animation: drawCheck .5s cubic-bezier(.65,0,.35,1) .45s forwards;
+  }
+  @keyframes drawCheck {
+    to { stroke-dashoffset: 0; }
+  }
+  .checkmark-ring {
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 2px solid rgba(46,125,79,.18);
+    animation: ringPulse 2s ease-out infinite;
+  }
+  @keyframes ringPulse {
+    0% { transform: scale(1); opacity: .8; }
+    100% { transform: scale(1.25); opacity: 0; }
+  }
+  .confirm-title {
+    font-family: var(--font-serif);
+    font-size: clamp(1.75rem, 4vw, 2.6rem);
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 12px;
+    animation: confirmFadeUp .7s var(--ease) .2s both;
+  }
+  .confirm-sub {
+    color: var(--text-muted);
+    font-size: 15px;
+    max-width: 480px;
+    margin: 0 auto 26px;
+    line-height: 1.65;
+    animation: confirmFadeUp .7s var(--ease) .3s both;
+  }
+  .order-badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 8px;
+    animation: confirmFadeUp .7s var(--ease) .4s both;
+  }
+  .order-ref-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--white);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-pill);
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    box-shadow: var(--shadow-xs);
+  }
+  .order-ref-chip strong {
+    font-family: 'Courier New', monospace;
+    letter-spacing: .06em;
+    color: var(--gold);
+  }
+  .status-badge-lg {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 18px;
+    border-radius: var(--r-pill);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    border: 1px solid;
+  }
+  .status-badge-lg .dot-live {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    animation: livePulse 1.6s ease-in-out infinite;
+  }
+  @keyframes livePulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .5; transform: scale(.8); }
+  }
+  .status-pending { background: #FFF8EA; color: #B67D15; border-color: #F0DCA8; }
+  .status-pending .dot-live { background: #B67D15; }
+  .status-confirmed { background: #EAF1FE; color: #2563EB; border-color: #C7D9FB; }
+  .status-confirmed .dot-live { background: #2563EB; }
+  .status-shipped { background: #F3EEFE; color: #7C3AED; border-color: #DCD1FA; }
+  .status-shipped .dot-live { background: #7C3AED; }
+  .status-delivered { background: #EAF6EE; color: var(--success); border-color: #A8DABC; }
+  .status-delivered .dot-live { background: var(--success); }
+  .status-cancelled { background: #FDECEA; color: var(--danger); border-color: #F3B7B0; }
+  .status-cancelled .dot-live { background: var(--danger); }
+
+  .confirm-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: clamp(20px, 3vw, 30px);
+    margin-bottom: 18px;
+    box-shadow: var(--shadow-sm);
+    animation: confirmFadeUp .7s var(--ease) both;
+  }
+  .confirm-card:nth-of-type(1) { animation-delay: .45s; }
+  .confirm-card:nth-of-type(2) { animation-delay: .55s; }
+  .confirm-card:nth-of-type(3) { animation-delay: .65s; }
+  .confirm-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .confirm-card-head h3 {
+    font-family: var(--font-serif);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0;
+  }
+  .confirm-item-row {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--ivory);
+    margin-bottom: 10px;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  }
+  .confirm-item-row:last-child { margin-bottom: 0; }
+  .confirm-item-row:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-xs);
+  }
+  .confirm-item-img {
+    width: 68px;
+    height: 68px;
+    border-radius: var(--r-sm);
+    object-fit: cover;
+    background: var(--cream);
+    flex-shrink: 0;
+  }
+  .confirm-item-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .confirm-item-name {
+    font-weight: 600;
+    font-size: 14.5px;
+    color: var(--ink);
+    word-break: break-word;
+    line-height: 1.4;
+    margin-bottom: 3px;
+  }
+  .confirm-item-meta {
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+  .confirm-item-price {
+    font-weight: 700;
+    color: var(--gold);
+    font-size: 15px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .confirm-totals {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border);
+  }
+  .confirm-totals .row {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    font-size: 14px;
+    gap: 8px;
+  }
+  .confirm-totals .row.total {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--gold);
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    margin-top: 8px;
+  }
+  .address-block {
+    font-size: 14px;
+    line-height: 1.75;
+    color: var(--text-main);
+  }
+  .address-block strong { color: var(--ink); }
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+  }
+  .info-tile {
+    padding: 12px 14px;
+    background: var(--cream-2);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+  }
+  .info-tile .label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin-bottom: 5px;
+  }
+  .info-tile .value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    word-break: break-word;
+  }
+  .confirm-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 26px;
+    animation: confirmFadeUp .7s var(--ease) .75s both;
+  }
+  .confirm-actions .btn {
+    min-width: 180px;
+    min-height: 48px;
+    font-size: 14px;
+  }
+  .loading-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+  }
+  .loading-state .spinner-lg {
+    display: inline-block;
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 560px) {
+    .checkmark-wrap { width: 78px; height: 78px; }
+    .checkmark-wrap svg { width: 38px; height: 38px; }
+    .confirm-actions .btn { width: 100%; min-width: 0; }
+    .confirm-item-img { width: 56px; height: 56px; }
+    .order-badge-row { flex-direction: column; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .checkmark-wrap, .checkmark-wrap svg path, .checkmark-ring,
+    .confirm-title, .confirm-sub, .order-badge-row, .confirm-card,
+    .confirm-actions { animation: none !important; opacity: 1 !important; transform: none !important; stroke-dashoffset: 0 !important; }
+  }
+</style>
+</head>
+<body>
+<header class="navbar">
+  <div class="nav-container">
+    <div class="nav-left"><a href="index.html"><img src="logo.png" alt="PrettyPick" id="brand-logo"></a></div>
+    <div class="nav-right">
+      <a href="account.html" class="icon-btn" aria-label="Account">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main class="section-container" style="max-width:760px;">
+  <div id="confirm-root">
+    <div class="loading-state">
+      <div class="spinner-lg"></div>
+      <p>Loading your order…</p>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+import { auth, db } from './firebase-config.js';
+import { doc, getDoc } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+
+const root = document.getElementById('confirm-root');
+const params = new URLSearchParams(location.search);
+const orderId = params.get('id') || sessionStorage.getItem('pp_last_order_id');
+
+function fmtStatus(s) {
+  return (s || 'pending').charAt(0).toUpperCase() + (s || 'pending').slice(1);
+}
+
+function renderError(msg) {
+  root.innerHTML = `
+    <div class="confirm-hero">
+      <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
+      <h1 class="confirm-title">Order Not Found</h1>
+      <p class="confirm-sub">${escapeHtml(msg)}</p>
+      <div class="confirm-actions">
+        <a href="index.html" class="btn btn-primary">Continue Shopping</a>
+        <a href="account.html#tab-orders" class="btn btn-outline">My Orders</a>
+      </div>
+    </div>`;
+}
+
+async function loadOrder() {
+  if (!orderId) { renderError('No order reference found.'); return; }
+  const user = auth.currentUser;
+  if (!user) {
+    sessionStorage.setItem('pp_redirect', 'order-confirmation.html?id=' + encodeURIComponent(orderId));
+    window.location.href = 'login.html';
+    return;
+  }
+  try {
+    const snap = await getDoc(doc(db, 'orders', orderId));
+    if (!snap.exists()) { renderError('This order could not be found.'); return; }
+    const o = { id: snap.id, ...snap.data() };
+    if (o.userId && o.userId !== user.uid) {
+      renderError('You do not have permission to view this order.'); return;
+    }
+    renderConfirmation(o);
+    // Clean the WhatsApp-return flag; keep last_order_id for back-button recovery
+    sessionStorage.removeItem('pp_whatsapp_return_pending');
+  } catch (e) {
+    console.error(e);
+    renderError('Failed to load order. Please try again.');
+  }
+}
+
+function renderConfirmation(o) {
+  const status = o.orderStatus || 'pending';
+  const statusClass = `status-${status}`;
+  const created = o.createdAt?.toDate ? o.createdAt.toDate() : null;
+  const dateStr = created
+    ? created.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    : '—';
+  const timeStr = created
+    ? created.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    : '';
+  const addr = o.shippingAddress || {};
+  const items = Array.isArray(o.items) ? o.items : [];
+  const subtotal = Number(o.subtotal) || 0;
+  const discount = Number(o.discountAmount) || 0;
+  const shipping = Number(o.shipping) || 0;
+  const total = Number(o.total) || 0;
+  const shortId = (o.id || '').slice(-8).toUpperCase();
+
+  const productBase = `${location.origin}${location.pathname.replace('order-confirmation.html', 'product.html')}`;
+
+  root.innerHTML = `
+    <div class="confirm-hero">
+      <div class="checkmark-wrap">
+        <span class="checkmark-ring"></span>
+        <svg viewBox="0 0 52 52" aria-hidden="true"><path d="M14 27l8 8 16-16"/></svg>
+      </div>
+      <h1 class="confirm-title">Order Placed Successfully</h1>
+      <p class="confirm-sub">Thank you${addr.name ? ', ' + escapeHtml(addr.name.split(' ')[0]) : ''}! Your order request has been received. Our team will verify it shortly via WhatsApp.</p>
+      <div class="order-badge-row">
+        <span class="order-ref-chip">Order Ref: <strong>#${escapeHtml(shortId)}</strong></span>
+        <span class="status-badge-lg ${statusClass}"><span class="dot-live"></span>${escapeHtml(fmtStatus(status))}</span>
+      </div>
+    </div>
+
+    <div class="confirm-card">
+      <div class="confirm-card-head">
+        <h3>Order Details</h3>
+        <span style="font-size:12.5px;color:var(--text-muted);">${escapeHtml(dateStr)}${timeStr ? ' · ' + escapeHtml(timeStr) : ''}</span>
+      </div>
+      <div>
+        ${items.map(it => {
+          const img = it.image ? escapeHtml(it.image) : '';
+          const link = `${productBase}?id=${encodeURIComponent(it.productId || '')}`;
+          const lineTotal = (Number(it.price) || 0) * (Number(it.qty) || 0);
+          return `
+            <div class="confirm-item-row">
+              <a href="${link}" style="flex-shrink:0;">
+                ${img ? `<img class="confirm-item-img" src="${img}" alt="${escapeHtml(it.name || '')}" onerror="this.style.visibility='hidden';">` : `<div class="confirm-item-img"></div>`}
+              </a>
+              <div class="confirm-item-info">
+                <a href="${link}" class="confirm-item-name" style="display:block;color:var(--ink);">${escapeHtml(it.name || 'Item')}</a>
+                <div class="confirm-item-meta">${formatPrice(it.price)} × ${it.qty}</div>
+              </div>
+              <div class="confirm-item-price">${formatPrice(lineTotal)}</div>
+            </div>`;
+        }).join('')}
+      </div>
+      <div class="confirm-totals">
+        <div class="row"><span>Subtotal</span><span>${formatPrice(subtotal)}</span></div>
+        ${discount > 0 ? `<div class="row" style="color:var(--success);"><span>Discount${o.couponCode ? ` (${escapeHtml(o.couponCode)})` : ''}</span><span>-${formatPrice(discount)}</span></div>` : ''}
+        <div class="row"><span style="color:var(--text-muted);">Shipping</span><span>${shipping === 0 ? 'Free' : formatPrice(shipping)}</span></div>
+        <div class="row total"><span>Total</span><span>${formatPrice(total)}</span></div>
+      </div>
+    </div>
+
+    <div class="confirm-card">
+      <div class="confirm-card-head">
+        <h3>Shipping & Payment</h3>
+      </div>
+      <div class="info-grid" style="margin-bottom:16px;">
+        <div class="info-tile"><div class="label">Payment Method</div><div class="value">${escapeHtml((o.paymentMethod || 'whatsapp').toUpperCase())}</div></div>
+        <div class="info-tile"><div class="label">Payment Status</div><div class="value">${escapeHtml(fmtStatus(o.paymentStatus || 'unpaid'))}</div></div>
+        <div class="info-tile"><div class="label">Order Status</div><div class="value">${escapeHtml(fmtStatus(status))}</div></div>
+      </div>
+      <div class="address-block">
+        <strong>${escapeHtml(addr.name || o.customerName || '—')}</strong><br>
+        ${escapeHtml(addr.phone || '—')}<br>
+        ${escapeHtml(addr.line1 || '')}${addr.city ? ', ' + escapeHtml(addr.city) : ''}${addr.postal ? ' - ' + escapeHtml(addr.postal) : ''}<br>
+        ${escapeHtml(addr.country || '')}
+      </div>
+    </div>
+
+    <div class="confirm-actions">
+      <a href="account.html#tab-orders" class="btn btn-primary">View My Orders</a>
+      <a href="index.html" class="btn btn-outline">Continue Shopping</a>
+    </div>
+  `;
+}
+
+onAuthStateChanged(auth, (user) => {
+  if (!user) {
+    if (orderId) sessionStorage.setItem('pp_redirect', 'order-confirmation.html?id=' + encodeURIComponent(orderId));
+    window.location.href = 'login.html';
+    return;
+  }
+  loadOrder();
+});
+</script>
+</body>
+</html>

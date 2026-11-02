@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>My Account | PrettyPick</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="shared.js"></script>
+</head>
+<body>
+<header class="navbar pp-header">
+  <div class="nav-container" id="pp-nav-root"></div>
+</header>
+
+<main class="account-layout" id="account-top">
+  <div class="account-summary" id="account-summary" aria-live="polite">
+    <div class="account-header">
+      <div class="avatar-circle" id="user-avatar">U</div>
+      <div class="account-header-info">
+        <h1 id="user-name">User</h1>
+        <p id="user-email">email@example.com</p>
+      </div>
+    </div>
+  </div>
+
+  <aside class="account-sidebar" aria-label="Account navigation">
+    <h3>My Account</h3>
+    <a class="sidebar-link active" data-tab="overview" href="#tab-overview" role="button">Overview</a>
+    <a class="sidebar-link" data-tab="personal" href="#tab-personal" role="button">Personal Info</a>
+    <a class="sidebar-link" data-tab="orders" href="#tab-orders" role="button">My Orders</a>
+    <a class="sidebar-link" href="wishlist.html">My Wishlist</a>
+    <a class="sidebar-link" href="cart.html">My Cart</a>
+    <a class="sidebar-link" data-tab="security" href="#tab-security" role="button">Security</a>
+    <a class="sidebar-link danger" role="button" id="logout-link">Logout</a>
+  </aside>
+
+  <div class="account-main" id="account-content-wrap">
+    <div id="loading-state">
+      <div style="display:flex;gap:20px;align-items:center;margin-bottom:30px;">
+        <div class="skeleton skeleton-avatar"></div>
+        <div style="flex:1;min-width:0;">
+          <div class="skeleton skeleton-text" style="width:40%;"></div>
+          <div class="skeleton skeleton-text" style="width:60%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="account-content" class="hidden" tabindex="-1">
+      <div id="tab-overview" class="tab-content active">
+        <h2 class="section-title-sm">Dashboard Overview</h2>
+        <p style="color:var(--text-muted);margin-bottom:20px;">Welcome back to your PrettyPick account.</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">
+          <div style="background:var(--cream);padding:18px;border-radius:var(--radius-md);">
+            <h3 style="font-size:13px;color:var(--text-muted);">Email Status</h3>
+            <p style="font-weight:bold;font-size:17px;margin-top:8px;" id="overview-email-status">Unverified</p>
+          </div>
+          <div style="background:var(--cream);padding:18px;border-radius:var(--radius-md);">
+            <h3 style="font-size:13px;color:var(--text-muted);">Role</h3>
+            <p style="font-weight:bold;font-size:17px;margin-top:8px;" id="overview-role">Customer</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-personal" class="tab-content">
+        <h2 class="section-title-sm">Personal Information</h2>
+        <form id="profile-form">
+          <div class="dash-form-group"><label for="profile-name">Full Name</label><input type="text" id="profile-name" required maxlength="100"></div>
+          <div class="dash-form-group">
+            <label for="profile-email">Email Address</label>
+            <input type="email" id="profile-email" disabled style="background:var(--ivory);cursor:not-allowed;">
+            <small style="color:var(--text-muted);font-size:12px;">Email cannot be changed here.</small>
+          </div>
+          <div class="dash-form-group"><label for="profile-phone">Phone Number</label><input type="tel" id="profile-phone" placeholder="Enter your phone number" maxlength="20"></div>
+          <button type="submit" class="btn btn-primary" id="save-profile-btn">Save Changes</button>
+        </form>
+      </div>
+
+      <div id="tab-orders" class="tab-content">
+        <h2 class="section-title-sm">My Orders</h2>
+        <div id="orders-list"><p style="color:var(--text-muted);">Loading orders…</p></div>
+      </div>
+
+      <div id="tab-security" class="tab-content">
+        <h2 class="section-title-sm">Security Settings</h2>
+        <div style="margin-bottom:28px;">
+          <h3 style="font-size:16px;margin-bottom:8px;">Email Verification</h3>
+          <p style="color:var(--text-muted);font-size:14px;margin-bottom:12px;">Status: <strong id="security-email-status">Unverified</strong></p>
+          <button class="btn btn-outline" id="verify-email-btn">Send Verification Email</button>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:20px;">
+          <h3 style="font-size:16px;margin-bottom:8px;">Password</h3>
+          <p style="color:var(--text-muted);font-size:14px;margin-bottom:12px;">Change your password securely.</p>
+          <button class="btn btn-outline" id="reset-pass-btn">Send Password Reset Link</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer id="pp-footer-root"></footer>
+
+<script type="module">
+import { auth, db } from './firebase-config.js';
+import { onAuthStateChanged, signOut, sendEmailVerification, sendPasswordResetEmail, updateProfile } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+const loading = document.getElementById('loading-state');
+const content = document.getElementById('account-content');
+let currentUser = null;
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function getHeaderOffset() {
+  const header = document.querySelector('.navbar');
+  return header ? header.getBoundingClientRect().height : 0;
+}
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = 'login.html'; return; }
+  currentUser = user;
+  try {
+    const ref = doc(db, 'users', user.uid);
+    const snap = await getDoc(ref);
+    const data = snap.exists() ? snap.data() : {};
+    const name = data.name || user.displayName || 'Valued Customer';
+    const isVerified = user.emailVerified;
+    const isAdmin = data.role === 'admin';
+
+    document.getElementById('user-name').textContent = name;
+    document.getElementById('user-email').textContent = user.email;
+    document.getElementById('user-avatar').textContent = name.charAt(0).toUpperCase();
+    document.getElementById('profile-name').value = name;
+    document.getElementById('profile-email').value = user.email;
+    document.getElementById('profile-phone').value = data.phone || '';
+
+    const statusText = isVerified ? 'Verified' : 'Unverified';
+    const color = isVerified ? 'green' : '#dc2626';
+    document.getElementById('overview-email-status').textContent = statusText;
+    document.getElementById('overview-email-status').style.color = color;
+    document.getElementById('security-email-status').textContent = statusText;
+    document.getElementById('security-email-status').style.color = color;
+    if (isVerified) document.getElementById('verify-email-btn').style.display = 'none';
+    if (isAdmin) {
+      document.getElementById('overview-role').textContent = 'Administrator';
+      document.getElementById('pp-admin-link')?.classList.remove('hidden');
+    }
+
+    loading.classList.add('hidden');
+    content.classList.remove('hidden');
+
+    document.getElementById('profile-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const newName = document.getElementById('profile-name').value.trim();
+      const newPhone = document.getElementById('profile-phone').value.trim();
+      if (!newName) { showToast('Name required', 'warning'); return; }
+      const btn = document.getElementById('save-profile-btn');
+      btn.textContent = 'Saving…'; btn.disabled = true;
+      try {
+        await updateDoc(doc(db, 'users', user.uid), { name: newName, phone: newPhone, updatedAt: serverTimestamp() });
+        await updateProfile(user, { displayName: newName });
+        document.getElementById('user-name').textContent = newName;
+        document.getElementById('user-avatar').textContent = newName.charAt(0).toUpperCase();
+        showToast('Profile updated', 'success');
+      } catch (err) {
+        showToast('Update failed: ' + err.code, 'error');
+      }
+      finally { btn.textContent = 'Save Changes'; btn.disabled = false; }
+    };
+
+    document.getElementById('verify-email-btn').onclick = async () => {
+      try {
+        await sendEmailVerification(currentUser);
+        showToast('Verification email sent', 'success');
+      } catch (err) { showToast('Error: ' + err.code, 'error'); }
+    };
+    document.getElementById('reset-pass-btn').onclick = async () => {
+      try {
+        await sendPasswordResetEmail(auth, user.email);
+        showToast('Reset link sent to your email', 'success');
+      } catch (err) { showToast('Error: ' + err.code, 'error'); }
+    };
+
+    loadOrders(user.uid);
+  } catch (err) {
+    console.error(err);
+    loading.innerHTML = '<p style="color:#dc2626;">Failed to load profile.</p>';
+  }
+});
+
+function paymentBadge(status) {
+  const s = status || 'unpaid';
+  const cls = s === 'paid' ? 'paid' : s === 'refunded' ? 'refunded' : 'unpaid';
+  const label = s === 'paid' ? 'PAID' : s === 'refunded' ? 'REFUNDED' : 'UNPAID';
+  return `<span class="payment-badge payment-${cls}">${label}</span>`;
+}
+
+async function loadOrders(uid) {
+  const list = document.getElementById('orders-list');
+  try {
+    const snap = await getDocs(query(collection(db, 'orders'), where('userId', '==', uid)));
+    if (snap.empty) {
+      list.innerHTML = '<div style="text-align:center;padding:36px 20px;background:var(--ivory);border:1px dashed var(--border);border-radius:var(--radius-md);"><p style="color:var(--text-muted);margin-bottom:16px;">No orders yet.</p><a href="index.html" class="btn btn-primary">Start Shopping</a></div>';
+      return;
+    }
+    const orders = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    const colorMap = { pending: '#C98B21', confirmed: '#2563eb', shipped: '#7c3aed', delivered: 'var(--success)', cancelled: 'var(--danger)' };
+
+    list.innerHTML = orders.map(o => {
+      const status = o.orderStatus || 'pending';
+      const statusColor = colorMap[status] || 'var(--text-muted)';
+      const paidAt = o.paidAt?.toDate ? o.paidAt.toDate().toLocaleDateString() : '';
+      return `
+        <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:16px;margin-bottom:12px;border-left:4px solid ${statusColor};">
+          <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <strong>Order #${escapeHtml(o.id.slice(-8).toUpperCase())}</strong>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              ${paymentBadge(o.paymentStatus)}
+              <span style="text-transform:capitalize;color:${statusColor};font-weight:700;font-size:13px;">${escapeHtml(status)}</span>
+            </div>
+          </div>
+          <p style="font-size:14px;color:var(--text-muted);margin-top:6px;">
+            ${(o.items || []).length} item(s) · Total ${formatPrice(o.total)}
+          </p>
+          ${o.couponCode ? `<p style="font-size:13px;color:var(--success);margin-top:4px;">Coupon: <span class="coupon-code-tag">${escapeHtml(o.couponCode)}</span> saved ${formatPrice(o.discountAmount || 0)}</p>` : ''}
+          ${o.shipping > 0 ? `<p style="font-size:13px;color:var(--text-muted);margin-top:4px;">Shipping: ${formatPrice(o.shipping)}</p>` : ''}
+          <p style="font-size:13px;color:var(--text-muted);margin-top:4px;">
+            Payment method: ${escapeHtml(o.paymentMethod || 'whatsapp')}
+            ${paidAt ? ` · Paid on ${escapeHtml(paidAt)}` : ''}
+            · Placed ${o.createdAt?.toDate ? o.createdAt.toDate().toLocaleDateString() : '—'}
+          </p>
+          <a href="order-confirmation.html?id=${encodeURIComponent(o.id)}" class="btn btn-outline btn-sm" style="margin-top:10px;">View Details</a>
+        </div>`;
+    }).join('');
+  } catch (err) {
+    console.error(err);
+    list.innerHTML = '<p style="color:#dc2626;">Failed to load orders.</p>';
+  }
+}
+
+function scrollToTab(tabId) {
+  const target = document.getElementById(`tab-${tabId}`);
+  if (!target) return;
+  const headerH = getHeaderOffset();
+  const rect = target.getBoundingClientRect();
+  const y = rect.top + window.scrollY - headerH - 12;
+  window.scrollTo({ top: Math.max(0, y), behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+  setTimeout(() => {
+    content.focus({ preventScroll: true });
+  }, prefersReducedMotion ? 0 : 320);
+}
+
+window.switchTab = (tabId, btn) => {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.sidebar-link').forEach(el => el.classList.remove('active'));
+  const t = document.getElementById(`tab-${tabId}`);
+  if (t) t.classList.add('active');
+  if (btn) btn.classList.add('active');
+  scrollToTab(tabId);
+};
+
+document.querySelectorAll('.sidebar-link[data-tab]').forEach(link => {
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchTab(link.dataset.tab, link);
+  });
+});
+
+document.getElementById('logout-link').addEventListener('click', async () => {
+  if (confirm('Logout?')) {
+    await signOut(auth);
+    showToast('Logged out', 'info');
+    window.location.href = 'index.html';
+  }
+});
+</script>
+</body>
+</html>

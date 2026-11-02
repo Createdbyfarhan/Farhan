@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Bootstrap Admin | PrettyPick</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="auth-wrapper">
+  <div class="auth-card">
+    <div class="auth-header">
+      <h2>Bootstrap Admin</h2>
+      <p>One-time secure admin setup</p>
+    </div>
+    <form id="bs-form">
+      <div id="msg" class="error-msg hidden" role="alert"></div>
+      <div class="form-group">
+        <label for="secret">Bootstrap secret (from Firebase Console &rarr; config/bootstrap/secret)</label>
+        <input type="password" id="secret" class="form-control" required autocomplete="off">
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="btn">Become Admin</button>
+    </form>
+    <div class="auth-footer"><p><a href="login.html">Back to Sign In</a></p></div>
+  </div>
+</div>
+<script type="module">
+import { auth, db } from './firebase-config.js';
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+const msg = document.getElementById('msg');
+const show = (t, ok) => { msg.textContent = t; msg.className = (ok ? 'success-msg' : 'error-msg'); };
+
+onAuthStateChanged(auth, (u) => {
+  if (!u) { window.location.href = 'login.html'; return; }
+  if (!u.emailVerified) { show('Verify your email before bootstrapping admin.', false); }
+});
+
+document.getElementById('bs-form').onsubmit = async (e) => {
+  e.preventDefault();
+  msg.className = 'hidden';
+  const user = auth.currentUser;
+  if (!user) return;
+  if (!user.emailVerified) return show('Email not verified.', false);
+
+  const secret = document.getElementById('secret').value;
+  if (!secret) return show('Secret required.', false);
+
+  try {
+    // 1. Read bootstrap config (client rules block read — this will fail unless rules allow)
+    // We use a Cloud Function approach normally. Here we attempt a direct read;
+    // if rules block it, tell the admin to use the Cloud Function (documented in README).
+    let cfgSnap;
+    try {
+      cfgSnap = await getDoc(doc(db, 'config', 'bootstrap'));
+    } catch (err) {
+      return show('Bootstrap config not readable from client. Use the Cloud Function (see README) or temporarily allow read in rules.', false);
+    }
+    if (!cfgSnap.exists()) return show('Bootstrap config missing. Create config/bootstrap in Firebase Console.', false);
+    const cfg = cfgSnap.data();
+    if (cfg.used) return show('Bootstrap already used.', false);
+    if (cfg.value !== secret) return show('Invalid secret.', false);
+
+    // 2. Promote self
+    await updateDoc(doc(db, 'users', user.uid), { role: 'admin', updatedAt: serverTimestamp() });
+
+    // 3. Mark used — rules block client write, so this may fail; that's fine:
+    //    the Cloud Function path is the recommended one. Direct path is documented as less secure.
+    try { await updateDoc(doc(db, 'config', 'bootstrap'), { used: true, usedBy: user.uid, usedAt: serverTimestamp() }); }
+    catch (_) { /* expected if rules block; secret stays but role already granted */ }
+
+    show('You are now an admin. Redirecting…', true);
+    setTimeout(() => window.location.href = 'admin.html', 1200);
+  } catch (err) {
+    show('Bootstrap failed: ' + err.code, false);
+  }
+};
+</script>
+</body>
+</html>

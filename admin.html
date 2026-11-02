@@ -1,0 +1,1645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Admin | PrettyPick</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="shared.js"></script>
+</head>
+<body>
+<header class="navbar pp-header">
+  <div class="nav-container" id="pp-nav-root"></div>
+</header>
+
+<main class="admin-shell" id="admin-app">
+  <p style="text-align:center;color:var(--text-muted);padding:60px 0;grid-column:1/-1;">Verifying admin access…</p>
+</main>
+
+<footer id="pp-footer-root"></footer>
+
+<script type="module">
+import { auth, db } from './firebase-config.js';
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
+import {
+  doc, getDoc, setDoc, collection, getDocs, addDoc, updateDoc, deleteDoc, runTransaction,
+  query, where, orderBy, limit, serverTimestamp, writeBatch, increment
+} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+import { IMGBB_API_KEY, IMGBB_UPLOAD_URL, MAX_FILE_SIZE, ALLOWED_TYPES } from './imgbb-config.js';
+
+const app = document.getElementById('admin-app');
+let adminUser = null;
+let currentView = 'dashboard';
+let globalSettings = { shippingCharge: 0, freeShippingThreshold: 0 };
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = 'login.html'; return; }
+  const snap = await getDoc(doc(db, 'users', user.uid));
+  if (!snap.exists() || snap.data().role !== 'admin' || !user.emailVerified) {
+    app.innerHTML = '<p style="text-align:center;color:#dc2626;padding:60px;grid-column:1/-1;">Access denied. Admin only.</p>';
+    return;
+  }
+  adminUser = user;
+  await loadGlobalSettings();
+  renderShell();
+});
+
+async function loadGlobalSettings() {
+  try {
+    const s = await getDoc(doc(db, 'settings', 'shipping'));
+    if (s.exists()) {
+      globalSettings = { ...globalSettings, ...s.data() };
+    }
+  } catch (e) { console.warn('Settings load failed', e.code); }
+}
+
+function renderShell() {
+  app.innerHTML = `
+    <aside class="admin-side" id="admin-side">
+      <div class="admin-side-group">
+        <h4>Overview</h4>
+        <button class="admin-side-link active" data-view="dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          Dashboard
+        </button>
+      </div>
+      <div class="admin-side-group">
+        <h4>Catalog</h4>
+        <button class="admin-side-link" data-view="products">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 7l-8-4-8 4v10l8 4 8-4z"/><path d="M12 3v18"/></svg>
+          Products
+        </button>
+        <button class="admin-side-link" data-view="categories">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
+          Categories
+        </button>
+        <button class="admin-side-link" data-view="subcategories">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg>
+          Subcategories
+        </button>
+      </div>
+      <div class="admin-side-group">
+        <h4>Content</h4>
+        <button class="admin-side-link" data-view="banners">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          Banners
+        </button>
+        <button class="admin-side-link" data-view="reviews">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          Reviews
+        </button>
+      </div>
+      <div class="admin-side-group">
+        <h4>Orders & Customers</h4>
+        <button class="admin-side-link" data-view="orders">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Orders
+        </button>
+        <button class="admin-side-link" data-view="customers">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          Customers
+        </button>
+      </div>
+      <div class="admin-side-group">
+        <h4>Marketing</h4>
+        <button class="admin-side-link" data-view="coupons">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/></svg>
+          Coupons
+        </button>
+      </div>
+      <div class="admin-side-group">
+        <h4>Utilities</h4>
+        <button class="admin-side-link" data-view="settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
+        <button class="admin-side-link" data-view="audit">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+          Audit Log
+        </button>
+      </div>
+    </aside>
+    <section class="admin-main" id="admin-main"></section>
+  `;
+  document.querySelectorAll('.admin-side-link').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.admin-side-link').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      currentView = btn.dataset.view;
+      renderView();
+    };
+  });
+  renderView();
+}
+
+async function logAction(action, details) {
+  try {
+    await addDoc(collection(db, 'auditLogs'), {
+      actorUid: adminUser.uid, actorEmail: adminUser.email,
+      action, details: details || {}, createdAt: serverTimestamp()
+    });
+  } catch (e) { console.warn('Audit log failed', e.code); }
+}
+
+function topbar(title, subtitle) {
+  return `
+    <div class="admin-topbar">
+      <div>
+        <div class="admin-title">${escapeHtml(title)}</div>
+        <div class="admin-sub">${escapeHtml(subtitle || '')}</div>
+      </div>
+      <span class="admin-badge">${escapeHtml(adminUser.email)}</span>
+    </div>`;
+}
+
+async function renderView() {
+  const m = document.getElementById('admin-main');
+  m.innerHTML = '<p style="color:var(--text-muted);">Loading…</p>';
+  try {
+    if (currentView === 'dashboard') return renderDashboard(m);
+    if (currentView === 'products') return renderProducts(m);
+    if (currentView === 'categories') return renderCategories(m);
+    if (currentView === 'subcategories') return renderSubcategories(m);
+    if (currentView === 'banners') return renderBanners(m);
+    if (currentView === 'reviews') return renderReviews(m);
+    if (currentView === 'orders') return renderOrders(m);
+    if (currentView === 'customers') return renderCustomers(m);
+        if (currentView === 'coupons') return renderCoupons(m);
+    if (currentView === 'settings') return renderSettings(m);
+    if (currentView === 'audit') return renderAudit(m);
+  } catch (e) {
+    console.error(e);
+    m.innerHTML = `<p style="color:#dc2626;">Error: ${escapeHtml(e.message)}</p>`;
+    showToast('Error loading view: ' + e.message, 'error');
+  }
+}
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+async function renderDashboard(m) {
+  m.innerHTML = topbar('Dashboard', 'Overview of your store at a glance');
+  const [p, cat, sub, users, orders, reviewsSnap, couponsSnap] = await Promise.all([
+    getDocs(collection(db, 'products')),
+    getDocs(collection(db, 'categories')),
+    getDocs(collection(db, 'subcategories')),
+    getDocs(collection(db, 'users')),
+    getDocs(collection(db, 'orders')),
+    getDocs(collection(db, 'reviews')),
+    getDocs(collection(db, 'coupons'))
+  ]);
+  const prods = p.docs.map(d => d.data());
+  const ords = orders.docs.map(d => d.data());
+
+  const activeProducts = prods.filter(x => x.active !== false).length;
+  const lowStock = prods.filter(x => Number(x.stock) > 0 && Number(x.stock) < 5).length;
+  const outOfStock = prods.filter(x => Number(x.stock) <= 0).length;
+
+  const statusCount = {};
+  ['pending','confirmed','shipped','delivered','cancelled'].forEach(s => statusCount[s] = 0);
+  ords.forEach(o => { const s = o.orderStatus || 'pending'; statusCount[s] = (statusCount[s] || 0) + 1; });
+
+  const paidOrders = ords.filter(o => o.paymentStatus === 'paid');
+  const refundedOrders = ords.filter(o => o.paymentStatus === 'refunded');
+  const unpaidOrders = ords.filter(o => o.paymentStatus !== 'paid' && o.paymentStatus !== 'refunded');
+
+  const totalRevenue = paidOrders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+
+  const pendingReviews = reviewsSnap.docs.filter(d => (d.data().status || 'pending') === 'pending').length;
+  const activeCoupons = couponsSnap.docs.filter(d => d.data().active !== false).length;
+
+  m.innerHTML += `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px;">
+      <div class="stat-card"><h3>Total Products</h3><p>${p.size}</p></div>
+      <div class="stat-card"><h3>Active</h3><p>${activeProducts}</p></div>
+      <div class="stat-card"><h3>Categories</h3><p>${cat.size}</p></div>
+      <div class="stat-card"><h3>Subcategories</h3><p>${sub.size}</p></div>
+      <div class="stat-card"><h3>Customers</h3><p>${users.size}</p></div>
+      <div class="stat-card"><h3>Total Orders</h3><p>${orders.size}</p></div>
+      <div class="stat-card"><h3>Paid Orders</h3><p style="color:var(--success);">${paidOrders.length}</p></div>
+      <div class="stat-card"><h3>Unpaid Orders</h3><p style="color:#C98B21;">${unpaidOrders.length}</p></div>
+      <div class="stat-card"><h3>Refunded</h3><p style="color:var(--danger);">${refundedOrders.length}</p></div>
+      <div class="stat-card"><h3>Sales (paid only)</h3><p>${paidOrders.length}</p></div>
+      <div class="stat-card"><h3>Total Revenue</h3><p>${formatPrice(totalRevenue)}</p></div>
+      <div class="stat-card"><h3>Active Coupons</h3><p>${activeCoupons}</p></div>
+      <div class="stat-card"><h3>Pending Reviews</h3><p>${pendingReviews}</p></div>
+      <div class="stat-card"><h3>Low Stock</h3><p style="color:${lowStock>0?'#C0362C':'var(--gold)'}">${lowStock}</p></div>
+      <div class="stat-card"><h3>Out of Stock</h3><p style="color:${outOfStock>0?'#C0362C':'var(--gold)'}">${outOfStock}</p></div>
+    </div>
+
+    <h3 style="font-family:var(--font-serif);font-size:20px;margin:24px 0 12px;">Order Status</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
+      ${['pending','confirmed','shipped','delivered','cancelled'].map(s => `
+        <div class="stat-card">
+          <h3 style="text-transform:capitalize">${s}</h3>
+          <p>${statusCount[s] || 0}</p>
+        </div>`).join('')}
+    </div>
+
+    <h3 style="font-family:var(--font-serif);font-size:20px;margin:24px 0 12px;">Recent Orders</h3>
+    <div>
+      ${ords.slice(0, 5).length === 0
+        ? '<p style="color:var(--text-muted);">No orders yet.</p>'
+        : ords.slice(0,5).map(o => `
+          <div class="admin-row">
+            <div class="admin-row-body">
+              <div class="admin-row-title">#${escapeHtml((o.orderId || '').slice(-8) || '—')} · ${escapeHtml(o.customerName || '')}</div>
+              <div class="admin-row-meta">${formatPrice(o.total)} · ${escapeHtml(o.orderStatus || 'pending')} · Payment: <strong style="color:${o.paymentStatus==='paid'?'var(--success)':(o.paymentStatus==='refunded'?'var(--danger)':'#C98B21')}">${escapeHtml(o.paymentStatus || 'unpaid')}</strong></div>
+            </div>
+          </div>`).join('')}
+    </div>
+  `;
+}
+
+/* ============================================================
+   PRODUCTS
+   ============================================================ */
+async function renderProducts(m) {
+  m.innerHTML = topbar('Products', 'Manage your product catalog') + `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+      <input id="prod-search" placeholder="Search products…" style="padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--r-sm);max-width:280px;flex:1 1 200px;">
+      <button class="btn btn-primary" id="new-product-btn">+ New Product</button>
+    </div>
+    <div id="product-form-wrap"></div>
+    <div id="product-list"></div>
+  `;
+  document.getElementById('new-product-btn').onclick = () => showProductForm();
+  const searchEl = document.getElementById('prod-search');
+  const allSnap = await getDocs(collection(db, 'products'));
+  const allProducts = allSnap.docs.map(d => normalizeProduct(d));
+  function paint(filter) {
+    const list = document.getElementById('product-list');
+    const filtered = allProducts.filter(p =>
+      !filter || (p.name || '').toLowerCase().includes(filter) || (p.categoryName || '').toLowerCase().includes(filter)
+    );
+    if (!filtered.length) { list.innerHTML = '<p style="color:var(--text-muted);">No products found.</p>'; return; }
+    list.innerHTML = filtered.map(p => {
+      const imgSrc = isProbablyImageUrl(p.image) ? p.image : '';
+      return `
+        <div class="admin-row">
+          <img class="admin-row-img" src="${escapeHtml(imgSrc)}" alt="${escapeHtml(p.name)}" onerror="this.style.display='none';">
+          <div class="admin-row-body">
+            <div class="admin-row-title">${escapeHtml(p.name)}</div>
+            <div class="admin-row-meta">${formatPrice(p.price)} · Stock: ${p.stock} · ${p.active ? 'Active' : 'Inactive'} · ${escapeHtml(p.categoryName || '—')}</div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="editProduct('${escapeHtml(p.id)}')">Edit</button>
+          <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="deleteProduct('${escapeHtml(p.id)}','${escapeHtml(p.name)}')">Delete</button>
+        </div>`;
+    }).join('');
+  }
+  paint('');
+  searchEl.addEventListener('input', e => paint(e.target.value.trim().toLowerCase()));
+}
+
+async function showProductForm(productId) {
+  const wrap = document.getElementById('product-form-wrap');
+  let product = {};
+  if (productId) {
+    const s = await getDoc(doc(db, 'products', productId));
+    if (s.exists()) product = { id: s.id, ...s.data() };
+  }
+  const [catSnap, subSnap] = await Promise.all([
+    getDocs(collection(db, 'categories')),
+    getDocs(collection(db, 'subcategories'))
+  ]);
+  const categories = catSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.active !== false);
+  const subcategories = subSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.active !== false);
+
+  const initialMain = normaliseImageUrl(product.image) || '';
+  const initialImages = (Array.isArray(product.images) ? product.images : []).map(normaliseImageUrl).filter(Boolean);
+  let currentMain = initialMain;
+  let currentExtras = initialImages.filter(u => u !== initialMain);
+  let isUploading = false;
+
+  wrap.innerHTML = `
+    <form id="product-form" class="admin-main" style="margin-bottom:16px;padding:20px;">
+      <h3 style="margin-bottom:16px;font-family:var(--font-serif);font-size:20px;">${productId ? 'Edit' : 'New'} Product</h3>
+      <div class="dash-form-group"><label>Name *</label><input id="pf-name" value="${escapeHtml(product.name || '')}" required maxlength="200"></div>
+      <div class="dash-form-group"><label>Description</label><textarea id="pf-desc" rows="3" maxlength="4000">${escapeHtml(product.description || '')}</textarea></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;">
+        <div class="dash-form-group"><label>Price (₹) *</label><input type="number" step="0.01" min="0" id="pf-price" value="${product.price || ''}" required></div>
+        <div class="dash-form-group"><label>Old Price (₹)</label><input type="number" step="0.01" min="0" id="pf-oldprice" value="${product.oldPrice || ''}"></div>
+        <div class="dash-form-group"><label>Stock *</label><input type="number" min="0" id="pf-stock" value="${product.stock || 0}" required></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+        <div class="dash-form-group"><label>Category</label>
+          <select id="pf-cat">
+            <option value="">— none —</option>
+            ${categories.map(cat => `<option value="${escapeHtml(cat.id)}" ${product.categoryId === cat.id ? 'selected' : ''}>${escapeHtml(cat.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="dash-form-group"><label>Subcategory</label>
+          <select id="pf-subcat">
+            <option value="">— none —</option>
+            ${subcategories.map(sub => `<option value="${escapeHtml(sub.id)}" data-cat="${escapeHtml(sub.categoryId || '')}" ${product.subcategoryId === sub.id ? 'selected' : ''}>${escapeHtml(sub.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div style="background:var(--cream-2);padding:14px;border-radius:var(--r-md);margin-bottom:18px;">
+        <h4 style="font-family:var(--font-sans);font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-muted);">Shipping (per unit)</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
+          <div class="dash-form-group" style="margin-bottom:0;"><label>Shipping Charge (₹)</label><input type="number" step="0.01" min="0" id="pf-shipping" value="${product.shippingCharge != null ? product.shippingCharge : ''}" placeholder="Leave blank for global"></div>
+          <div class="dash-form-group" style="margin-bottom:0;"><label style="display:flex;align-items:center;gap:8px;text-transform:none;font-size:13px;color:var(--ink);margin-top:22px;"><input type="checkbox" id="pf-freeship" ${product.freeShipping === true ? 'checked' : ''}> Free Shipping</label></div>
+        </div>
+      </div>
+      <div class="dash-form-group">
+        <label>Images</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <input type="file" id="pf-image-files" accept="image/*" multiple style="flex:1 1 220px;">
+          <input type="text" id="pf-image-url" placeholder="Paste image URL + Enter" style="flex:1 1 220px;padding:10px;border:1px solid var(--border-strong);border-radius:var(--r-sm);">
+        </div>
+        <div id="pf-upload-progress" style="display:none;margin-bottom:8px;">
+          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+            <div id="pf-progress-bar" style="height:100%;width:0%;background:var(--gold);transition:width .2s;"></div>
+          </div>
+          <small id="pf-progress-text" style="color:var(--text-muted);font-size:12px;margin-top:4px;display:block;">Uploading…</small>
+        </div>
+        <div class="img-grid" id="pf-img-grid"></div>
+        <small style="color:var(--text-muted);font-size:12px;display:block;margin-top:6px;">First image is the main image. Click any thumbnail to make it main. Click × to remove. Max ${Math.round(MAX_FILE_SIZE/1024/1024)}MB per file.</small>
+      </div>
+      <div class="dash-form-group"><label><input type="checkbox" id="pf-active" ${product.active !== false ? 'checked' : ''}> Active</label></div>
+      <div class="dash-form-group"><label><input type="checkbox" id="pf-featured" ${product.featured === true ? 'checked' : ''}> Featured</label></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="submit" class="btn btn-primary" id="pf-save">${productId ? 'Update' : 'Create'}</button>
+        <button type="button" class="btn btn-outline" id="pf-cancel">Cancel</button>
+      </div>
+      <div id="pf-status" style="margin-top:12px;font-size:14px;"></div>
+    </form>`;
+
+  function renderImgGrid() {
+    const grid = document.getElementById('pf-img-grid');
+    const imgs = [currentMain, ...currentExtras].filter(Boolean);
+    if (!imgs.length) { grid.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">No images yet.</p>'; return; }
+    grid.innerHTML = imgs.map((src, i) => `
+      <div class="img-thumb ${i === 0 ? 'img-thumb-main' : ''}">
+        <img src="${escapeHtml(src)}" alt="" onerror="this.style.opacity=.3;">
+        ${i === 0 ? '<span class="img-thumb-badge">MAIN</span>' : ''}
+        <div class="img-thumb-actions">
+          ${i !== 0 ? `<button type="button" class="img-thumb-btn" onclick="window.__pfSetMain(${i})" title="Make main">★</button>` : ''}
+          <button type="button" class="img-thumb-btn" onclick="window.__pfRemoveImg(${i})" title="Remove">×</button>
+        </div>
+      </div>`).join('');
+  }
+
+  window.__pfSetMain = (i) => {
+    const imgs = [currentMain, ...currentExtras].filter(Boolean);
+    const chosen = imgs[i];
+    if (!chosen) return;
+    currentExtras = imgs.filter((_, idx) => idx !== i);
+    currentMain = chosen;
+    renderImgGrid();
+  };
+  window.__pfRemoveImg = (i) => {
+    const imgs = [currentMain, ...currentExtras].filter(Boolean);
+    imgs.splice(i, 1);
+    currentMain = imgs[0] || '';
+    currentExtras = imgs.slice(1);
+    renderImgGrid();
+  };
+
+  const catSel = document.getElementById('pf-cat');
+  const subSel = document.getElementById('pf-subcat');
+  function refreshSubcats() {
+    const catId = catSel.value;
+    const allOpts = [...subSel.querySelectorAll('option')];
+    allOpts.forEach(opt => {
+      if (!opt.value) return;
+      const parent = opt.getAttribute('data-cat');
+      opt.hidden = !!catId && parent && parent !== catId;
+    });
+    if (subSel.selectedOptions[0]?.hidden) subSel.value = '';
+  }
+  catSel.addEventListener('change', refreshSubcats);
+  refreshSubcats();
+
+  document.getElementById('pf-cancel').onclick = () => { wrap.innerHTML = ''; };
+  renderImgGrid();
+
+  document.getElementById('pf-image-files').onchange = async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    if (!files.length) return;
+    isUploading = true;
+    const progressWrap = document.getElementById('pf-upload-progress');
+    const progressBar = document.getElementById('pf-progress-bar');
+    const progressText = document.getElementById('pf-progress-text');
+    progressWrap.style.display = 'block';
+    let completed = 0;
+    for (const f of files) {
+      progressText.textContent = `Uploading ${completed + 1} of ${files.length}…`;
+      const url = await uploadImage(f, (pct) => {
+        const total = ((completed + pct / 100) / files.length) * 100;
+        progressBar.style.width = total + '%';
+      });
+      if (url) {
+        if (!currentMain) currentMain = url;
+        else if (!currentExtras.includes(url) && url !== currentMain) currentExtras.push(url);
+        renderImgGrid();
+      }
+      completed++;
+      progressBar.style.width = ((completed / files.length) * 100) + '%';
+    }
+    setTimeout(() => { progressWrap.style.display = 'none'; progressBar.style.width = '0%'; }, 800);
+    isUploading = false;
+  };
+
+  document.getElementById('pf-image-url').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const raw = e.target.value.trim();
+      const url = normaliseImageUrl(raw);
+      if (url) {
+        if (!currentMain) currentMain = url;
+        else if (!currentExtras.includes(url) && url !== currentMain) currentExtras.push(url);
+        e.target.value = '';
+        renderImgGrid();
+      }
+    }
+  });
+
+  document.getElementById('product-form').onsubmit = async (e) => {
+    e.preventDefault();
+    if (isUploading) { showToast('Please wait for uploads to finish', 'warning'); return; }
+    const status = document.getElementById('pf-status');
+    status.textContent = 'Saving…'; status.style.color = 'var(--text-muted)';
+    const catId = catSel.value;
+    const subId = subSel.value;
+    const catName = categories.find(x => x.id === catId)?.name || '';
+    const subName = subcategories.find(x => x.id === subId)?.name || '';
+
+    const imgs = [currentMain, ...currentExtras].filter(Boolean);
+    const uniqueImgs = [];
+    const seen = new Set();
+    for (const u of imgs) { if (!seen.has(u)) { seen.add(u); uniqueImgs.push(u); } }
+
+    const shippingRaw = document.getElementById('pf-shipping').value.trim();
+    const shippingCharge = shippingRaw === '' ? null : parseFloat(shippingRaw);
+    const freeShipping = document.getElementById('pf-freeship').checked;
+
+    const data = {
+      name: document.getElementById('pf-name').value.trim(),
+      description: document.getElementById('pf-desc').value.trim(),
+      price: parseFloat(document.getElementById('pf-price').value),
+      oldPrice: parseFloat(document.getElementById('pf-oldprice').value) || null,
+      stock: parseInt(document.getElementById('pf-stock').value, 10) || 0,
+      categoryId: catId, categoryName: catName,
+      subcategoryId: subId, subcategoryName: subName,
+      shippingCharge: (shippingCharge != null && !isNaN(shippingCharge)) ? shippingCharge : null,
+      freeShipping,
+      image: uniqueImgs[0] || '',
+      images: uniqueImgs,
+      active: document.getElementById('pf-active').checked,
+      featured: document.getElementById('pf-featured').checked,
+      updatedAt: serverTimestamp()
+    };
+    if (!data.name || isNaN(data.price) || data.price < 0) {
+      status.textContent = 'Name and valid price required.'; status.style.color = '#dc2626';
+      showToast('Name and valid price required', 'warning'); return;
+    }
+    if (data.oldPrice !== null && data.oldPrice < data.price) {
+      status.textContent = 'Old price must be ≥ selling price.'; status.style.color = '#dc2626';
+      showToast('Old price must be ≥ selling price', 'warning'); return;
+    }
+    try {
+      if (productId) {
+        await updateDoc(doc(db, 'products', productId), data);
+        await logAction('product.update', { id: productId, name: data.name });
+        showToast('Product updated', 'success');
+      } else {
+        data.createdAt = serverTimestamp();
+        await addDoc(collection(db, 'products'), data);
+        await logAction('product.create', { name: data.name });
+        showToast('Product created', 'success');
+      }
+      status.textContent = 'Saved.'; status.style.color = 'green';
+      wrap.innerHTML = '';
+      renderProducts(document.getElementById('admin-main'));
+    } catch (err) {
+      status.textContent = 'Save failed: ' + err.code; status.style.color = '#dc2626';
+      showToast('Save failed: ' + err.code, 'error');
+    }
+  };
+}
+
+window.editProduct = (id) => showProductForm(id);
+window.deleteProduct = async (id, name) => {
+  if (!confirm(`Delete "${name}"? Cannot be undone.`)) return;
+  try {
+    await deleteDoc(doc(db, 'products', id));
+    await logAction('product.delete', { id, name });
+    renderProducts(document.getElementById('admin-main'));
+    showToast('Product deleted', 'success');
+  } catch (e) { showToast('Delete failed: ' + e.code, 'error'); }
+};
+
+/* ============================================================
+   CATEGORIES
+   ============================================================ */
+async function renderCategories(m) {
+  m.innerHTML = topbar('Categories', 'Top-level product categories') + `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+      <input id="cat-name-input" placeholder="New category name" style="padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--r-sm);max-width:280px;flex:1 1 200px;">
+      <button class="btn btn-primary" id="add-cat-btn">+ Add Category</button>
+    </div>
+    <div id="cat-list"></div>
+  `;
+  document.getElementById('add-cat-btn').onclick = async () => {
+    const input = document.getElementById('cat-name-input');
+    const name = input.value.trim();
+    if (!name) { showToast('Category name required', 'warning'); return; }
+    try {
+      await addDoc(collection(db, 'categories'), { name, active: true, order: Date.now(), createdAt: serverTimestamp() });
+      await logAction('category.create', { name });
+      input.value = '';
+      loadCatList();
+      showToast('Category created', 'success');
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+  await loadCatList();
+
+  async function loadCatList() {
+    const list = document.getElementById('cat-list');
+    const snap = await getDocs(collection(db, 'categories'));
+    const cats = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=>(a.order||0)-(b.order||0));
+    if (!cats.length) { list.innerHTML = '<p style="color:var(--text-muted);">No categories yet.</p>'; return; }
+    list.innerHTML = cats.map(cat => `
+      <div class="admin-row">
+        <div class="admin-row-body">
+          <div class="admin-row-title">${escapeHtml(cat.name)}</div>
+          <div class="admin-row-meta">${cat.active !== false ? 'Active' : 'Inactive'}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="window.__toggleCat('${escapeHtml(cat.id)}', ${cat.active !== false})">${cat.active !== false ? 'Disable' : 'Enable'}</button>
+        <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="window.__deleteCat('${escapeHtml(cat.id)}','${escapeHtml(cat.name)}')">Delete</button>
+      </div>`).join('');
+  }
+  window.__toggleCat = async (id, active) => {
+    try {
+      await updateDoc(doc(db, 'categories', id), { active: !active });
+      await logAction('category.toggle', { id, active: !active });
+      loadCatList();
+      showToast(active ? 'Category disabled' : 'Category enabled', 'success');
+    }
+    catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+  window.__deleteCat = async (id, name) => {
+    const [prodRefs, subRefs] = await Promise.all([
+      getDocs(query(collection(db, 'products'), where('categoryId', '==', id))),
+      getDocs(query(collection(db, 'subcategories'), where('categoryId', '==', id)))
+    ]);
+    if (!prodRefs.empty || !subRefs.empty) {
+      showToast(`Cannot delete — ${prodRefs.size} product(s) and ${subRefs.size} subcategory(ies) still reference it`, 'error');
+      return;
+    }
+    if (!confirm(`Delete category "${name}"?`)) return;
+    try {
+      await deleteDoc(doc(db, 'categories', id));
+      await logAction('category.delete', { id, name });
+      loadCatList();
+      showToast('Category deleted', 'success');
+    }
+    catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+}
+
+/* ============================================================
+   SUBCATEGORIES
+   ============================================================ */
+async function renderSubcategories(m) {
+  m.innerHTML = topbar('Subcategories', 'Group products under a parent category');
+  const catSnap = await getDocs(collection(db, 'categories'));
+  const cats = catSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=>(a.order||0)-(b.order||0));
+  m.innerHTML += `
+    <div class="admin-main" style="margin-bottom:16px;padding:16px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
+        <div class="dash-form-group"><label>New subcategory name</label><input id="sub-name" placeholder="e.g. Rings"></div>
+        <div class="dash-form-group"><label>Parent category</label>
+          <select id="sub-cat">
+            <option value="">— choose —</option>
+            ${cats.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="dash-form-group" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" id="add-sub-btn" style="width:100%;">+ Add Subcategory</button></div>
+      </div>
+    </div>
+    <div id="sub-list"></div>
+  `;
+  document.getElementById('add-sub-btn').onclick = async () => {
+    const name = document.getElementById('sub-name').value.trim();
+    const catId = document.getElementById('sub-cat').value;
+    const catName = cats.find(c => c.id === catId)?.name || '';
+    if (!name || !catId) { showToast('Name and category required', 'warning'); return; }
+    try {
+      await addDoc(collection(db, 'subcategories'), {
+        name, categoryId: catId, categoryName: catName,
+        active: true, order: Date.now(), createdAt: serverTimestamp()
+      });
+      await logAction('subcategory.create', { name, categoryId: catId });
+      document.getElementById('sub-name').value = '';
+      loadSubList();
+      showToast('Subcategory created', 'success');
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+  await loadSubList();
+
+  async function loadSubList() {
+    const list = document.getElementById('sub-list');
+    const snap = await getDocs(collection(db, 'subcategories'));
+    const subs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=>(a.order||0)-(b.order||0));
+    if (!subs.length) { list.innerHTML = '<p style="color:var(--text-muted);">No subcategories yet.</p>'; return; }
+    list.innerHTML = subs.map(sub => `
+      <div class="admin-row">
+        <div class="admin-row-body">
+          <div class="admin-row-title">${escapeHtml(sub.name)}</div>
+          <div class="admin-row-meta">${escapeHtml(sub.categoryName || '(no parent)')} · ${sub.active !== false ? 'Active' : 'Inactive'}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="window.__toggleSub('${escapeHtml(sub.id)}', ${sub.active !== false})">${sub.active !== false ? 'Disable' : 'Enable'}</button>
+        <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="window.__deleteSub('${escapeHtml(sub.id)}','${escapeHtml(sub.name)}')">Delete</button>
+      </div>`).join('');
+  }
+  window.__toggleSub = async (id, active) => {
+    try {
+      await updateDoc(doc(db, 'subcategories', id), { active: !active });
+      await logAction('subcategory.toggle', { id, active: !active });
+      loadSubList();
+      showToast(active ? 'Subcategory disabled' : 'Subcategory enabled', 'success');
+    }
+    catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+  window.__deleteSub = async (id, name) => {
+    const prodRefs = await getDocs(query(collection(db, 'products'), where('subcategoryId', '==', id)));
+    if (!prodRefs.empty) { showToast(`Cannot delete — ${prodRefs.size} product(s) still use it`, 'error'); return; }
+    if (!confirm(`Delete subcategory "${name}"?`)) return;
+    try {
+      await deleteDoc(doc(db, 'subcategories', id));
+      await logAction('subcategory.delete', { id, name });
+      loadSubList();
+      showToast('Subcategory deleted', 'success');
+    }
+    catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+}
+  /* ============================================================
+   BANNERS
+   ============================================================ */
+async function renderBanners(m) {
+  m.innerHTML = topbar('Banners', 'Homepage hero slides') + `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:16px;">
+      <button class="btn btn-primary" id="new-banner-btn">+ New Banner</button>
+    </div>
+    <div id="banner-form-wrap"></div>
+    <div id="banner-list"></div>
+  `;
+  document.getElementById('new-banner-btn').onclick = () => showBannerForm();
+  await loadBannerList();
+
+  async function loadBannerList() {
+    const list = document.getElementById('banner-list');
+    const snap = await getDocs(collection(db, 'banners'));
+    const banners = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=>(a.order||0)-(b.order||0));
+    if (!banners.length) { list.innerHTML = '<p style="color:var(--text-muted);">No banners yet.</p>'; return; }
+    list.innerHTML = banners.map(b => {
+      const src = normaliseImageUrl(b.imageUrl || b.image || '');
+      return `
+        <div class="admin-row">
+          <img class="admin-row-img" style="width:80px;height:48px;" src="${escapeHtml(src)}" alt="" onerror="this.style.display='none';">
+          <div class="admin-row-body">
+            <div class="admin-row-title">${escapeHtml(b.title || '(untitled)')}</div>
+            <div class="admin-row-meta">${b.eyebrow ? escapeHtml(b.eyebrow) + ' · ' : ''}Order ${b.order || 0} · ${b.active !== false ? 'Active' : 'Inactive'}</div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="window.__editBanner('${escapeHtml(b.id)}')">Edit</button>
+          <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="window.__deleteBanner('${escapeHtml(b.id)}')">Delete</button>
+        </div>`;
+    }).join('');
+  }
+
+  async function showBannerForm(bannerId) {
+    const wrap = document.getElementById('banner-form-wrap');
+    let banner = {};
+    if (bannerId) {
+      const s = await getDoc(doc(db, 'banners', bannerId));
+      if (s.exists()) banner = { id: s.id, ...s.data() };
+    }
+    const currentImage = normaliseImageUrl(banner.imageUrl || banner.image || '');
+    wrap.innerHTML = `
+      <form id="banner-form" class="admin-main" style="margin-bottom:16px;padding:20px;">
+        <h3 style="margin-bottom:16px;font-family:var(--font-serif);font-size:20px;">${bannerId ? 'Edit' : 'New'} Banner</h3>
+        <div class="dash-form-group"><label>Eyebrow (optional)</label><input id="bf-eyebrow" value="${escapeHtml(banner.eyebrow || '')}" placeholder="e.g. PrettyPick Edit" maxlength="60"></div>
+        <div class="dash-form-group"><label>Title</label><input id="bf-title" value="${escapeHtml(banner.title || '')}" maxlength="120"></div>
+        <div class="dash-form-group"><label>Subtitle</label><input id="bf-subtitle" value="${escapeHtml(banner.subtitle || '')}" maxlength="200"></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;">
+          <div class="dash-form-group"><label>CTA Text</label><input id="bf-cta" value="${escapeHtml(banner.ctaText || 'Shop Now')}" maxlength="40"></div>
+          <div class="dash-form-group"><label>Link</label><input id="bf-link" value="${escapeHtml(banner.link || '#trending')}"></div>
+          <div class="dash-form-group"><label>Display Order</label><input type="number" id="bf-order" value="${banner.order || 0}"></div>
+        </div>
+        <div class="dash-form-group">
+          <label>Image</label>
+          <input type="file" id="bf-image-file" accept="image/*">
+          <input type="text" id="bf-image-url" value="${escapeHtml(currentImage)}" placeholder="Or paste URL" style="margin-top:6px;">
+          <img id="bf-preview" src="${escapeHtml(currentImage)}" alt="Preview" style="max-height:120px;margin-top:8px;display:${currentImage ? 'block' : 'none'};" onerror="this.style.display='none';">
+        </div>
+        <div class="dash-form-group"><label><input type="checkbox" id="bf-active" ${banner.active !== false ? 'checked' : ''}> Active</label></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="submit" class="btn btn-primary">${bannerId ? 'Update' : 'Create'}</button>
+          <button type="button" class="btn btn-outline" id="bf-cancel">Cancel</button>
+        </div>
+        <div id="bf-status" style="margin-top:12px;font-size:14px;"></div>
+      </form>`;
+
+    document.getElementById('bf-cancel').onclick = () => { wrap.innerHTML = ''; };
+
+    document.getElementById('bf-image-file').onchange = async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const url = await uploadImage(file);
+      if (url) {
+        document.getElementById('bf-image-url').value = url;
+        const prev = document.getElementById('bf-preview'); prev.src = url; prev.style.display = 'block';
+        prev.onerror = () => { prev.style.display = 'none'; };
+      }
+    };
+
+    document.getElementById('banner-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const status = document.getElementById('bf-status');
+      status.textContent = 'Saving…';
+      const rawUrl = document.getElementById('bf-image-url').value.trim();
+      const imageUrl = normaliseImageUrl(rawUrl);
+      if (rawUrl && !imageUrl) {
+        status.textContent = 'Image URL must be an absolute http(s) URL or data URI.'; status.style.color = '#dc2626';
+        showToast('Invalid image URL', 'warning'); return;
+      }
+      const data = {
+        eyebrow: document.getElementById('bf-eyebrow').value.trim(),
+        title: document.getElementById('bf-title').value.trim(),
+        subtitle: document.getElementById('bf-subtitle').value.trim(),
+        ctaText: document.getElementById('bf-cta').value.trim() || 'Shop Now',
+        link: document.getElementById('bf-link').value.trim(),
+        order: parseInt(document.getElementById('bf-order').value, 10) || 0,
+        imageUrl,
+        active: document.getElementById('bf-active').checked,
+        updatedAt: serverTimestamp()
+      };
+      try {
+        if (bannerId) {
+          await updateDoc(doc(db, 'banners', bannerId), data);
+          await logAction('banner.update', { id: bannerId });
+          showToast('Banner updated', 'success');
+        } else {
+          data.createdAt = serverTimestamp();
+          await addDoc(collection(db, 'banners'), data);
+          await logAction('banner.create', { title: data.title });
+          showToast('Banner created', 'success');
+        }
+        status.textContent = 'Saved.'; status.style.color = 'green';
+        wrap.innerHTML = '';
+        loadBannerList();
+      } catch (err) {
+        status.textContent = 'Failed: ' + err.code; status.style.color = '#dc2626';
+        showToast('Failed: ' + err.code, 'error');
+      }
+    };
+  }
+
+  window.__editBanner = (id) => showBannerForm(id);
+  window.__deleteBanner = async (id) => {
+    if (!confirm('Delete this banner?')) return;
+    try {
+      await deleteDoc(doc(db, 'banners', id));
+      await logAction('banner.delete', { id });
+      loadBannerList();
+      showToast('Banner deleted', 'success');
+    }
+    catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+}
+
+/* ============================================================
+   REVIEWS
+   ============================================================ */
+async function renderReviews(m) {
+  m.innerHTML = topbar('Reviews', 'Approve, reject or delete customer reviews') + `
+    <div class="admin-filters">
+      <div class="dash-form-group"><label>Search (product, customer, headline)</label><input id="rev-search" placeholder="Search…"></div>
+    </div>
+    <div class="admin-tabs-bar" id="review-filters">
+      <button class="btn btn-outline admin-tab active" data-rev-filter="pending">Pending</button>
+      <button class="btn btn-outline admin-tab" data-rev-filter="approved">Approved</button>
+      <button class="btn btn-outline admin-tab" data-rev-filter="rejected">Rejected</button>
+      <button class="btn btn-outline admin-tab" data-rev-filter="all">All</button>
+    </div>
+    <div id="review-list"><p style="color:var(--text-muted);">Loading…</p></div>
+  `;
+
+  let filter = 'pending';
+  let allReviews = [];
+  let productsById = {};
+
+  async function reload() {
+    const [revSnap, prodSnap] = await Promise.all([
+      getDocs(query(collection(db, 'reviews'), limit(200))),
+      getDocs(collection(db, 'products'))
+    ]);
+    prodSnap.docs.forEach(d => {
+      const data = d.data();
+      productsById[d.id] = {
+        name: data.name || '',
+        image: data.image || ''
+      };
+    });
+    allReviews = revSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    paint();
+  }
+
+  function paint() {
+    const list = document.getElementById('review-list');
+    const q = (document.getElementById('rev-search')?.value || '').trim().toLowerCase();
+
+    const filtered = allReviews.filter(r => {
+      if (filter !== 'all' && (r.status || 'pending') !== filter) return false;
+      if (!q) return true;
+      const productName = (r.productName || productsById[r.productId]?.name || '').toLowerCase();
+      return productName.includes(q)
+        || (r.userName || '').toLowerCase().includes(q)
+        || (r.headline || r.title || '').toLowerCase().includes(q)
+        || (r.comment || '').toLowerCase().includes(q);
+    });
+
+    if (!filtered.length) {
+      list.innerHTML = `<p style="color:var(--text-muted);">No ${filter === 'all' ? '' : filter + ' '}reviews match.</p>`;
+      return;
+    }
+    const colorMap = { pending: '#C98B21', approved: 'var(--success)', rejected: '#dc2626' };
+    list.innerHTML = filtered.map(r => {
+      const c = colorMap[r.status || 'pending'] || 'var(--text-muted)';
+      const prod = productsById[r.productId] || {};
+      const prodName = r.productName || prod.name || r.productId || '(product removed)';
+      const prodImg = isProbablyImageUrl(prod.image) ? prod.image : '';
+      const when = r.createdAt?.toDate ? r.createdAt.toDate().toLocaleString() : '—';
+      return `
+        <div class="admin-row" style="align-items:flex-start;flex-wrap:wrap;border-left:4px solid ${c};">
+          ${prodImg ? `<img src="${escapeHtml(prodImg)}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--cream);" onerror="this.style.display='none';">` : `<div style="width:56px;height:56px;border-radius:6px;background:var(--cream);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:10px;">No img</div>`}
+          <div class="admin-row-body" style="flex:1;min-width:220px;">
+            <div class="admin-row-title">${escapeHtml(r.headline || r.title || '(no headline)')} <span style="color:${c};text-transform:capitalize;font-size:11px;margin-left:6px;">${escapeHtml(r.status || 'pending')}</span></div>
+            <div class="admin-row-meta">
+              <strong>${escapeHtml(prodName)}</strong>
+              · ${escapeHtml(r.userName || 'Customer')}
+              ${r.userEmail ? ` · ${escapeHtml(r.userEmail)}` : ''}
+              · ${escapeHtml(when)}
+            </div>
+            <div style="color:var(--gold);margin-top:4px;">${renderStars(r.rating)} <span style="color:var(--text-muted);font-size:12px;margin-left:4px;">(${Number(r.rating) || 0}/5)</span></div>
+            <p style="font-size:13.5px;color:var(--text-muted);margin-top:6px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(r.comment || r.text || '')}</p>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:150px;">
+            ${(r.status || 'pending') !== 'approved' ? `<button class="btn btn-outline btn-sm" onclick="window.__approveReview('${escapeHtml(r.id)}')" style="color:var(--success);border-color:var(--success);">Approve</button>` : ''}
+            ${(r.status || 'pending') !== 'rejected' ? `<button class="btn btn-outline btn-sm" onclick="window.__rejectReview('${escapeHtml(r.id)}')" style="color:var(--danger);border-color:var(--danger);">Reject</button>` : ''}
+            <button class="btn btn-outline btn-sm" onclick="window.__deleteReview('${escapeHtml(r.id)}')">Delete</button>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  document.querySelectorAll('#review-filters [data-rev-filter]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('#review-filters [data-rev-filter]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      filter = btn.dataset.revFilter;
+      paint();
+    };
+  });
+
+  document.getElementById('rev-search').addEventListener('input', paint);
+
+  window.__approveReview = async (id) => {
+    try {
+      await updateDoc(doc(db, 'reviews', id), { status: 'approved', updatedAt: serverTimestamp() });
+      await logAction('review.approve', { id });
+      showToast('Review approved', 'success');
+      await reload();
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+  window.__rejectReview = async (id) => {
+    try {
+      await updateDoc(doc(db, 'reviews', id), { status: 'rejected', updatedAt: serverTimestamp() });
+      await logAction('review.reject', { id });
+      showToast('Review rejected', 'info');
+      await reload();
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+  window.__deleteReview = async (id) => {
+    if (!confirm('Delete this review permanently?')) return;
+    try {
+      await deleteDoc(doc(db, 'reviews', id));
+      await logAction('review.delete', { id });
+      showToast('Review deleted', 'success');
+      await reload();
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+
+  await reload();
+}
+
+/* ============================================================
+   ORDERS — with payment management
+   ============================================================ */
+async function renderOrders(m) {
+  m.innerHTML = topbar('Orders', 'Manage orders and payment status') + `
+    <div class="admin-filters">
+      <div class="dash-form-group"><label>Search (Order ID, customer, email)</label><input id="ord-search" placeholder="Search…"></div>
+      <div class="dash-form-group"><label>Order Status</label>
+        <select id="ord-status">
+          <option value="">All</option>
+          <option value="pending">Pending</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="shipped">Shipped</option>
+          <option value="delivered">Delivered</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div class="dash-form-group"><label>Payment Status</label>
+        <select id="ord-payment">
+          <option value="">All</option>
+          <option value="unpaid">Unpaid</option>
+          <option value="paid">Paid</option>
+          <option value="refunded">Refunded</option>
+        </select>
+      </div>
+      <button class="btn btn-outline btn-sm" id="ord-csv">Export CSV</button>
+    </div>
+    <div id="orders-wrap"></div>
+  `;
+
+  const allSnap = await getDocs(query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(500)));
+  const allOrders = allSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const groups = new Map();
+  allOrders.forEach(o => {
+    const key = o.userId || o.userEmail || 'unknown';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(o);
+  });
+
+  function paymentBadge(status) {
+    const s = status || 'unpaid';
+    const cls = s === 'paid' ? 'paid' : s === 'refunded' ? 'refunded' : 'unpaid';
+    const label = s === 'paid' ? 'PAID' : s === 'refunded' ? 'REFUNDED' : 'UNPAID';
+    return `<span class="payment-badge payment-${cls}">${label}</span>`;
+  }
+
+  function orderCard(o) {
+    const items = Array.isArray(o.items) ? o.items : [];
+    const created = o.createdAt?.toDate ? o.createdAt.toDate().toLocaleString() : '—';
+    const addr = o.shippingAddress || {};
+    const colorMap = { pending: '#C98B21', confirmed: '#2563eb', shipped: '#7c3aed', delivered: 'var(--success)', cancelled: 'var(--danger)' };
+    const c = colorMap[o.orderStatus || 'pending'] || 'var(--text-muted)';
+    const canCancel = (o.orderStatus || 'pending') !== 'delivered' && (o.orderStatus || 'pending') !== 'cancelled';
+    const paidAt = o.paidAt?.toDate ? o.paidAt.toDate().toLocaleString() : '';
+
+    return `
+      <div style="border:1px solid var(--border);border-radius:var(--r-md);padding:14px;margin-bottom:10px;background:var(--white);">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
+          <div>
+            <strong>#${escapeHtml((o.id || '').slice(-8).toUpperCase())}</strong>
+            <span style="color:var(--text-muted);font-size:13px;margin-left:8px;">${escapeHtml(created)}</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            ${paymentBadge(o.paymentStatus)}
+            <span style="color:${c};font-weight:700;text-transform:capitalize;font-size:13px;">${escapeHtml(o.orderStatus || 'pending')}</span>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:10px;">
+          ${items.map(it => `
+            <div style="display:flex;gap:10px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--ivory);min-width:0;">
+              ${isProbablyImageUrl(it.image) ? `<img src="${escapeHtml(it.image)}" alt="" style="width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0;">` : `<div style="width:48px;height:48px;border-radius:6px;background:var(--cream);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:10px;">No img</div>`}
+              <div style="min-width:0;">
+                <div style="font-size:13.5px;font-weight:600;word-break:break-word;">${escapeHtml(it.name || 'Item')}</div>
+                <div style="font-size:12px;color:var(--text-muted);">${formatPrice(it.price)} × ${it.qty} = <strong>${formatPrice((Number(it.price) || 0) * (Number(it.qty) || 0))}</strong></div>
+              </div>
+            </div>`).join('')}
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:12px;font-size:13px;">
+          <div><span style="color:var(--text-muted);">Subtotal:</span> <strong>${formatPrice(o.subtotal)}</strong></div>
+          ${o.discountAmount > 0 ? `<div><span style="color:var(--text-muted);">Discount${o.couponCode ? ` (${escapeHtml(o.couponCode)})` : ''}:</span> <strong style="color:var(--success);">-${formatPrice(o.discountAmount)}</strong></div>` : ''}
+          <div><span style="color:var(--text-muted);">Shipping:</span> <strong>${o.shipping ? formatPrice(o.shipping) : 'Free'}</strong></div>
+          <div><span style="color:var(--text-muted);">Total:</span> <strong style="color:var(--gold);">${formatPrice(o.total)}</strong></div>
+        </div>
+
+        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);font-size:13px;color:var(--text-muted);">
+          <div><strong style="color:var(--ink);">Ship to:</strong> ${escapeHtml(addr.name || o.customerName || '—')}, ${escapeHtml(addr.phone || '—')}</div>
+          <div>${escapeHtml(addr.line1 || '')} ${escapeHtml(addr.city || '')} ${escapeHtml(addr.postal || '')} ${escapeHtml(addr.country || '')}</div>
+          ${paidAt ? `<div style="color:var(--success);margin-top:6px;"><strong>Paid at:</strong> ${escapeHtml(paidAt)}</div>` : ''}
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center;">
+          <label style="font-size:12px;color:var(--text-muted);">Order status:</label>
+          <select data-order-id="${escapeHtml(o.id)}" onchange="window.__updateOrderStatus(this.dataset.orderId, this.value)" style="padding:6px;border-radius:6px;border:1px solid var(--border-strong);min-height:34px;">
+            ${['pending','confirmed','shipped','delivered','cancelled'].map(s => `<option value="${s}" ${(o.orderStatus||'pending')===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+
+          <label style="font-size:12px;color:var(--text-muted);margin-left:8px;">Payment:</label>
+          <select data-order-id="${escapeHtml(o.id)}" onchange="window.__updatePaymentStatus(this.dataset.orderId, this.value)" style="padding:6px;border-radius:6px;border:1px solid var(--border-strong);min-height:34px;">
+            <option value="unpaid" ${(o.paymentStatus||'unpaid')==='unpaid'?'selected':''}>Unpaid</option>
+            <option value="paid" ${(o.paymentStatus||'')==='paid'?'selected':''}>Paid</option>
+            <option value="refunded" ${(o.paymentStatus||'')==='refunded'?'selected':''}>Refunded</option>
+          </select>
+
+          ${canCancel ? `<button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="window.__cancelOrder('${escapeHtml(o.id)}')">Cancel & restore stock</button>` : ''}
+        </div>
+      </div>`;
+  }
+
+  function paint() {
+    const wrap = document.getElementById('orders-wrap');
+    const q = document.getElementById('ord-search').value.trim().toLowerCase();
+    const st = document.getElementById('ord-status').value;
+    const pay = document.getElementById('ord-payment').value;
+
+    const filteredGroups = [];
+    groups.forEach((orders, key) => {
+      const filtered = orders.filter(o => {
+        if (st && (o.orderStatus || 'pending') !== st) return false;
+        if (pay && (o.paymentStatus || 'unpaid') !== pay) return false;
+        if (!q) return true;
+        return (o.id || '').toLowerCase().includes(q) ||
+               (o.customerName || '').toLowerCase().includes(q) ||
+               (o.userEmail || '').toLowerCase().includes(q);
+      });
+      if (filtered.length) filteredGroups.push({ key, orders: filtered });
+    });
+
+    if (!filteredGroups.length) {
+      wrap.innerHTML = '<p style="color:var(--text-muted);">No orders match.</p>';
+      return;
+    }
+
+    wrap.innerHTML = filteredGroups.map(({ key, orders }) => {
+      const sample = orders[0];
+      const statusCount = {};
+      orders.forEach(o => { const s = o.orderStatus || 'pending'; statusCount[s] = (statusCount[s] || 0) + 1; });
+      const totalValue = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+      const paidCount = orders.filter(o => o.paymentStatus === 'paid').length;
+      return `
+        <div class="customer-group" style="border:1px solid var(--border);border-radius:var(--r-lg);padding:14px;margin-bottom:12px;background:var(--white);">
+          <button type="button" class="customer-group-header" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:10px;text-align:left;padding:4px 0;" onclick="this.parentElement.classList.toggle('open');">
+            <div style="min-width:0;">
+              <div style="font-weight:700;font-size:15px;">${escapeHtml(sample.customerName || sample.userEmail || 'Customer')}</div>
+              <div style="font-size:12.5px;color:var(--text-muted);">${escapeHtml(sample.userEmail || '')} · ${orders.length} order${orders.length === 1 ? '' : 's'} · ${formatPrice(totalValue)} total · ${paidCount} paid</div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+              ${Object.entries(statusCount).map(([s, n]) => `<span style="background:var(--cream);padding:2px 8px;border-radius:999px;font-size:11px;color:var(--ink);">${escapeHtml(s)}: ${n}</span>`).join('')}
+              <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+          </button>
+          <div class="customer-group-body" style="margin-top:12px;display:none;">
+            ${orders.map(orderCard).join('')}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  paint();
+  document.getElementById('ord-search').addEventListener('input', paint);
+  document.getElementById('ord-status').addEventListener('change', paint);
+  document.getElementById('ord-payment').addEventListener('change', paint);
+  document.getElementById('ord-csv').onclick = () => {
+    const rows = [['Order ID','Customer','Email','Items','Subtotal','Discount','Shipping','Total','Coupon','Payment Status','Order Status','Created','Paid At']];
+    allOrders.forEach(o => {
+      const itemsSummary = (o.items || []).map(i => `${i.name} × ${i.qty}`).join('; ');
+      rows.push([
+        o.id, o.customerName || '', o.userEmail || '', itemsSummary,
+        o.subtotal || 0, o.discountAmount || 0, o.shipping || 0, o.total || 0,
+        o.couponCode || '', o.paymentStatus || 'unpaid', o.orderStatus || 'pending',
+        o.createdAt?.toDate ? o.createdAt.toDate().toISOString() : '',
+        o.paidAt?.toDate ? o.paidAt.toDate().toISOString() : ''
+      ]);
+    });
+    downloadCSV(rows, 'orders.csv');
+    showToast('CSV downloaded', 'success');
+  };
+
+  async function reloadOrders() {
+    const snap = await getDocs(query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(500)));
+    allOrders.length = 0;
+    snap.docs.forEach(d => allOrders.push({ id: d.id, ...d.data() }));
+    groups.clear();
+    allOrders.forEach(ord => {
+      const k = ord.userId || ord.userEmail || 'unknown';
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(ord);
+    });
+    paint();
+  }
+
+  window.__updateOrderStatus = async (id, status) => {
+    const o = allOrders.find(x => x.id === id);
+    if (!o) return;
+    const prev = o.orderStatus || 'pending';
+    if (prev === status) return;
+    if (prev === 'delivered' || prev === 'cancelled') {
+      showToast(`Order is already ${prev} — cannot change status`, 'warning');
+      paint();
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'orders', id), { orderStatus: status, updatedAt: serverTimestamp() });
+      await logAction('order.status', { id, from: prev, to: status });
+      showToast(`Order → ${status}`, 'success');
+      await reloadOrders();
+    } catch (e) {
+      showToast('Failed: ' + e.code, 'error');
+    }
+  };
+
+  window.__updatePaymentStatus = async (id, newStatus) => {
+    const o = allOrders.find(x => x.id === id);
+    if (!o) return;
+    const prev = o.paymentStatus || 'unpaid';
+    if (prev === newStatus) return;
+
+    let paymentMethod = o.paymentMethod || '';
+    if (newStatus === 'paid') {
+      const methods = ['cash', 'upi', 'bank_transfer', 'card', 'whatsapp'];
+      const input = prompt(
+        `Mark order #${id.slice(-8).toUpperCase()} as PAID.\n\nEnter payment method:\n- cash\n- upi\n- bank_transfer\n- card\n- whatsapp\n\n(Existing: ${paymentMethod || 'none'})`,
+        paymentMethod || 'upi'
+      );
+      if (input === null) {
+        await reloadOrders();
+        return;
+      }
+      paymentMethod = (input || '').trim().toLowerCase();
+      if (!methods.includes(paymentMethod)) {
+        if (!confirm(`"${paymentMethod}" is not a standard method. Continue anyway?`)) {
+          await reloadOrders();
+          return;
+        }
+      }
+    }
+
+    try {
+      const updateData = {
+        paymentStatus: newStatus,
+        updatedAt: serverTimestamp()
+      };
+      if (newStatus === 'paid') {
+        if (!o.paidAt) {
+          updateData.paidAt = serverTimestamp();
+        }
+        if (paymentMethod) updateData.paymentMethod = paymentMethod;
+        updateData.paidBy = adminUser.uid;
+        updateData.paidByEmail = adminUser.email;
+      } else if (newStatus === 'refunded') {
+        updateData.refundedAt = serverTimestamp();
+        updateData.refundedBy = adminUser.uid;
+      } else if (newStatus === 'unpaid') {
+        updateData.paidAt = null;
+        updateData.refundedAt = null;
+      }
+
+      await updateDoc(doc(db, 'orders', id), updateData);
+      await logAction('order.payment', { id, from: prev, to: newStatus, method: paymentMethod });
+      showToast(`Payment → ${newStatus.toUpperCase()}`, 'success');
+      await reloadOrders();
+    } catch (e) {
+      showToast('Failed: ' + e.code, 'error');
+    }
+  };
+
+  window.__cancelOrder = async (id) => {
+    if (!confirm('Cancel this order and restore product stock? This cannot be undone.')) return;
+    const o = allOrders.find(x => x.id === id);
+    if (!o) return;
+    try {
+      await runTransaction(db, async (tx) => {
+        const orderRef = doc(db, 'orders', id);
+        const orderSnap = await tx.get(orderRef);
+        if (!orderSnap.exists()) throw new Error('Order not found.');
+        const od = orderSnap.data();
+        if (od.orderStatus === 'cancelled') { throw new Error('Order already cancelled.'); }
+
+        if (od.stockDecremented === true && od.stockRestored !== true) {
+          for (const it of (od.items || [])) {
+            const pRef = doc(db, 'products', it.productId);
+            const pSnap = await tx.get(pRef);
+            if (pSnap.exists()) {
+              const curStock = Number(pSnap.data().stock) || 0;
+              tx.update(pRef, { stock: curStock + (Number(it.qty) || 0), updatedAt: serverTimestamp() });
+            }
+          }
+        }
+
+        tx.update(orderRef, {
+          orderStatus: 'cancelled',
+          stockRestored: true,
+          updatedAt: serverTimestamp()
+        });
+      });
+      await logAction('order.cancel', { id });
+      showToast('Order cancelled & stock restored', 'success');
+      await reloadOrders();
+    } catch (e) {
+      showToast('Cancel failed: ' + (e.message || e.code), 'error');
+    }
+  };
+}
+
+function downloadCSV(rows, filename) {
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const csv = rows.map(r => r.map(esc).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ============================================================
+   CUSTOMERS
+   ============================================================ */
+async function renderCustomers(m) {
+  m.innerHTML = topbar('Customers', 'Registered users and their order counts') + `
+    <div class="admin-filters">
+      <div class="dash-form-group"><label>Search</label><input id="cust-search" placeholder="Name or email"></div>
+      <button class="btn btn-outline btn-sm" id="cust-csv">Export CSV</button>
+    </div>
+    <div id="cust-wrap"></div>
+  `;
+  const [usersSnap, ordersSnap] = await Promise.all([
+    getDocs(collection(db, 'users')),
+    getDocs(collection(db, 'orders'))
+  ]);
+  const ordersByUser = {};
+  ordersSnap.docs.forEach(d => { const o = d.data(); if (o.userId) ordersByUser[o.userId] = (ordersByUser[o.userId] || 0) + 1; });
+  const users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const wrap = document.getElementById('cust-wrap');
+
+  function paint() {
+    const q = document.getElementById('cust-search').value.trim().toLowerCase();
+    const filtered = users.filter(u => !q || (u.name||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q));
+    if (!filtered.length) { wrap.innerHTML = '<p style="color:var(--text-muted);">No customers match.</p>'; return; }
+    wrap.innerHTML = filtered.map(u => `
+      <div class="admin-row">
+        <div class="admin-row-body">
+          <div class="admin-row-title">${escapeHtml(u.name || '(no name)')}</div>
+          <div class="admin-row-meta">${escapeHtml(u.email || '')} · Role: ${escapeHtml(u.role || 'customer')} · ${ordersByUser[u.id] || 0} order(s)</div>
+        </div>
+        ${u.role !== 'admin' ? `<button class="btn btn-outline btn-sm" onclick="window.__promoteUser('${escapeHtml(u.id)}','${escapeHtml(u.email||'')}')">Promote to Admin</button>` : ''}
+      </div>`).join('');
+  }
+  paint();
+  document.getElementById('cust-search').addEventListener('input', paint);
+  document.getElementById('cust-csv').onclick = () => {
+    const rows = [['User ID','Name','Email','Role','Order Count']];
+    users.forEach(u => rows.push([u.id, u.name || '', u.email || '', u.role || 'customer', ordersByUser[u.id] || 0]));
+    downloadCSV(rows, 'customers.csv');
+    showToast('CSV downloaded', 'success');
+  };
+  window.__promoteUser = async (uid, email) => {
+    if (!confirm(`Promote ${email} to admin?`)) return;
+    try {
+      await updateDoc(doc(db, 'users', uid), { role: 'admin', updatedAt: serverTimestamp() });
+      await logAction('user.promote', { uid, email });
+      showToast('Promoted to admin', 'success');
+      renderCustomers(document.getElementById('admin-main'));
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+}
+
+/* ============================================================
+   COUPONS
+   ============================================================ */
+async function renderCoupons(m) {
+  m.innerHTML = topbar('Coupons', 'Create and manage discount coupons') + `
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="new-coupon-btn">+ Create Coupon</button>
+    </div>
+    <div id="coupon-form-wrap"></div>
+    <div id="coupon-list"></div>
+  `;
+  document.getElementById('new-coupon-btn').onclick = () => showCouponForm();
+  await loadCouponList();
+
+  async function loadCouponList() {
+    const list = document.getElementById('coupon-list');
+    const snap = await getDocs(collection(db, 'coupons'));
+    const coupons = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    if (!coupons.length) {
+      list.innerHTML = '<p style="color:var(--text-muted);">No coupons yet. Create your first coupon to start offering discounts.</p>';
+      return;
+    }
+    list.innerHTML = coupons.map(c => {
+      const now = new Date();
+      const expired = c.expiryDate && (c.expiryDate.toDate ? c.expiryDate.toDate() : new Date(c.expiryDate)) < now;
+      const status = !c.active ? 'Inactive' : (expired ? 'Expired' : 'Active');
+      const color = !c.active ? 'var(--text-muted)' : (expired ? 'var(--danger)' : 'var(--success)');
+      const usageText = c.usageLimit ? `${c.usedCount || 0} / ${c.usageLimit}` : `${c.usedCount || 0} uses`;
+      const discountText = c.discountType === 'percentage' ? `${c.discountValue}% off` : `${formatPrice(c.discountValue)} off`;
+      return `
+        <div class="admin-row">
+          <div class="admin-row-body">
+            <div class="admin-row-title">
+              <span style="background:var(--gold-soft);color:var(--gold);padding:3px 10px;border-radius:6px;font-family:monospace;font-size:13px;font-weight:700;">${escapeHtml(c.code)}</span>
+              <span style="color:${color};text-transform:capitalize;font-size:11px;margin-left:8px;">${status}</span>
+            </div>
+            <div class="admin-row-meta">${escapeHtml(c.name || '')} · ${discountText}${c.maxDiscount ? ` (max ${formatPrice(c.maxDiscount)})` : ''} · Min: ${c.minOrderValue ? formatPrice(c.minOrderValue) : 'None'} · ${usageText}</div>
+            <div class="admin-row-meta">${c.expiryDate ? 'Expires: ' + (c.expiryDate.toDate ? c.expiryDate.toDate().toLocaleDateString() : '—') : 'No expiry'}</div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="window.__editCoupon('${escapeHtml(c.id)}')">Edit</button>
+          <button class="btn btn-outline btn-sm" onclick="window.__toggleCoupon('${escapeHtml(c.id)}', ${c.active !== false})">${c.active !== false ? 'Disable' : 'Enable'}</button>
+          <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="window.__deleteCoupon('${escapeHtml(c.id)}','${escapeHtml(c.code)}')">Delete</button>
+        </div>`;
+    }).join('');
+  }
+
+  async function showCouponForm(couponId) {
+    const wrap = document.getElementById('coupon-form-wrap');
+    let coupon = {};
+    if (couponId) {
+      const s = await getDoc(doc(db, 'coupons', couponId));
+      if (s.exists()) coupon = { id: s.id, ...s.data() };
+    }
+
+    const startDateVal = coupon.startDate?.toDate ? coupon.startDate.toDate().toISOString().split('T')[0] : (coupon.startDate ? String(coupon.startDate).split('T')[0] : '');
+    const expiryDateVal = coupon.expiryDate?.toDate ? coupon.expiryDate.toDate().toISOString().split('T')[0] : (coupon.expiryDate ? String(coupon.expiryDate).split('T')[0] : '');
+
+    wrap.innerHTML = `
+      <form id="coupon-form" class="admin-main" style="margin-bottom:16px;padding:20px;">
+        <h3 style="margin-bottom:16px;font-family:var(--font-serif);font-size:20px;">${couponId ? 'Edit' : 'Create'} Coupon</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
+          <div class="dash-form-group"><label>Coupon Code *</label><input id="cf-code" value="${escapeHtml(coupon.code || '')}" required maxlength="30" style="text-transform:uppercase;" placeholder="e.g. PRETTY10"></div>
+          <div class="dash-form-group"><label>Coupon Name</label><input id="cf-name" value="${escapeHtml(coupon.name || '')}" maxlength="100" placeholder="e.g. Welcome Discount"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
+          <div class="dash-form-group"><label>Discount Type *</label>
+            <select id="cf-type">
+              <option value="percentage" ${coupon.discountType === 'percentage' ? 'selected' : ''}>Percentage (%)</option>
+              <option value="fixed" ${coupon.discountType === 'fixed' ? 'selected' : ''}>Fixed Amount (₹)</option>
+            </select>
+          </div>
+          <div class="dash-form-group"><label>Discount Value *</label><input type="number" step="0.01" min="0" id="cf-value" value="${coupon.discountValue || ''}" required></div>
+          <div class="dash-form-group"><label>Max Discount (₹)</label><input type="number" step="0.01" min="0" id="cf-max" value="${coupon.maxDiscount || ''}" placeholder="For % coupons"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
+          <div class="dash-form-group"><label>Min Order Value (₹)</label><input type="number" step="0.01" min="0" id="cf-min" value="${coupon.minOrderValue || ''}" placeholder="0"></div>
+          <div class="dash-form-group"><label>Usage Limit (total)</label><input type="number" min="0" id="cf-usage" value="${coupon.usageLimit || ''}" placeholder="Unlimited"></div>
+          <div class="dash-form-group"><label>Per User Limit</label><input type="number" min="1" id="cf-peruser" value="${coupon.perUserLimit || 1}"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
+          <div class="dash-form-group"><label>Start Date</label><input type="date" id="cf-start" value="${startDateVal}"></div>
+          <div class="dash-form-group"><label>Expiry Date</label><input type="date" id="cf-expiry" value="${expiryDateVal}"></div>
+        </div>
+        <div class="dash-form-group"><label>Description</label><textarea id="cf-desc" rows="2" maxlength="500">${escapeHtml(coupon.description || '')}</textarea></div>
+        <div class="dash-form-group"><label><input type="checkbox" id="cf-active" ${coupon.active !== false ? 'checked' : ''}> Active</label></div>
+
+        <div style="background:var(--cream-2);padding:14px;border-radius:var(--r-md);margin-bottom:16px;">
+          <h4 style="font-family:var(--font-sans);font-size:12px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-muted);">Preview</h4>
+          <div id="coupon-preview" style="font-size:14px;"></div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="submit" class="btn btn-primary">${couponId ? 'Update' : 'Create'}</button>
+          <button type="button" class="btn btn-outline" id="cf-cancel">Cancel</button>
+        </div>
+        <div id="cf-status" style="margin-top:12px;font-size:14px;"></div>
+      </form>`;
+
+    const updatePreview = () => {
+      const type = document.getElementById('cf-type').value;
+      const val = parseFloat(document.getElementById('cf-value').value) || 0;
+      const maxD = parseFloat(document.getElementById('cf-max').value) || 0;
+      const minO = parseFloat(document.getElementById('cf-min').value) || 0;
+      const preview = document.getElementById('coupon-preview');
+      let text = '';
+      if (type === 'percentage') {
+        text = `${val}% off`;
+        if (maxD > 0) text += ` (max ${formatPrice(maxD)})`;
+      } else {
+        text = `${formatPrice(val)} off`;
+      }
+      if (minO > 0) text += ` on orders above ${formatPrice(minO)}`;
+      preview.innerHTML = `<strong>${escapeHtml(document.getElementById('cf-code').value.toUpperCase() || 'CODE')}</strong> — ${text}`;
+    };
+    ['cf-type','cf-value','cf-max','cf-min','cf-code'].forEach(id => {
+      document.getElementById(id).addEventListener('input', updatePreview);
+      document.getElementById(id).addEventListener('change', updatePreview);
+    });
+    updatePreview();
+
+    document.getElementById('cf-cancel').onclick = () => { wrap.innerHTML = ''; };
+
+    document.getElementById('coupon-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const status = document.getElementById('cf-status');
+      const code = document.getElementById('cf-code').value.trim().toUpperCase();
+      const type = document.getElementById('cf-type').value;
+      const value = parseFloat(document.getElementById('cf-value').value);
+      const maxD = parseFloat(document.getElementById('cf-max').value) || 0;
+      const minO = parseFloat(document.getElementById('cf-min').value) || 0;
+      const usageLimit = parseInt(document.getElementById('cf-usage').value, 10) || 0;
+      const perUser = parseInt(document.getElementById('cf-peruser').value, 10) || 1;
+      const startStr = document.getElementById('cf-start').value;
+      const expiryStr = document.getElementById('cf-expiry').value;
+
+      if (!code) { status.textContent = 'Coupon code required.'; status.style.color = '#dc2626'; return; }
+      if (isNaN(value) || value <= 0) { status.textContent = 'Valid discount value required.'; status.style.color = '#dc2626'; return; }
+      if (type === 'percentage' && value > 100) { status.textContent = 'Percentage cannot exceed 100.'; status.style.color = '#dc2626'; return; }
+
+      const data = {
+        code,
+        name: document.getElementById('cf-name').value.trim(),
+        discountType: type,
+        discountValue: value,
+        maxDiscount: maxD || null,
+        minOrderValue: minO || 0,
+        usageLimit: usageLimit || null,
+        perUserLimit: perUser,
+        startDate: startStr ? new Date(startStr + 'T00:00:00').toISOString() : null,
+        expiryDate: expiryStr ? new Date(expiryStr + 'T23:59:59').toISOString() : null,
+        description: document.getElementById('cf-desc').value.trim(),
+        active: document.getElementById('cf-active').checked,
+        updatedAt: serverTimestamp()
+      };
+
+      if (!couponId) data.usedCount = 0;
+
+      status.textContent = 'Saving…'; status.style.color = 'var(--text-muted)';
+      try {
+        const existing = await getDocs(query(collection(db, 'coupons'), where('code', '==', code)));
+        const dup = existing.docs.find(d => d.id !== couponId);
+        if (dup) {
+          status.textContent = 'A coupon with this code already exists.';
+          status.style.color = '#dc2626';
+          showToast('Duplicate coupon code', 'error');
+          return;
+        }
+
+        if (couponId) {
+          await updateDoc(doc(db, 'coupons', couponId), data);
+          await logAction('coupon.update', { id: couponId, code });
+          showToast('Coupon updated', 'success');
+        } else {
+          data.createdAt = serverTimestamp();
+          await addDoc(collection(db, 'coupons'), data);
+          await logAction('coupon.create', { code });
+          showToast('Coupon created', 'success');
+        }
+        status.textContent = 'Saved.'; status.style.color = 'green';
+        wrap.innerHTML = '';
+        loadCouponList();
+      } catch (err) {
+        status.textContent = 'Failed: ' + err.code; status.style.color = '#dc2626';
+        showToast('Failed: ' + err.code, 'error');
+      }
+    };
+  }
+
+  window.__editCoupon = (id) => showCouponForm(id);
+  window.__toggleCoupon = async (id, active) => {
+    try {
+      await updateDoc(doc(db, 'coupons', id), { active: !active, updatedAt: serverTimestamp() });
+      await logAction('coupon.toggle', { id, active: !active });
+      loadCouponList();
+      showToast(active ? 'Coupon disabled' : 'Coupon enabled', 'success');
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+  window.__deleteCoupon = async (id, code) => {
+    if (!confirm(`Delete coupon "${code}"? This cannot be undone.`)) return;
+    try {
+      await deleteDoc(doc(db, 'coupons', id));
+      await logAction('coupon.delete', { id, code });
+      loadCouponList();
+      showToast('Coupon deleted', 'success');
+    } catch (e) { showToast('Failed: ' + e.code, 'error'); }
+  };
+}
+
+/* ============================================================
+   SETTINGS
+   ============================================================ */
+async function renderSettings(m) {
+  m.innerHTML = topbar('Settings', 'Store-wide configuration');
+  m.innerHTML += `
+    <div class="admin-main" style="padding:20px;">
+      <h3 style="font-family:var(--font-serif);font-size:20px;margin-bottom:16px;">Shipping Settings</h3>
+      <p style="color:var(--text-muted);font-size:13.5px;margin-bottom:20px;">These defaults apply when a product doesn't have its own shipping charge. Product-level shipping overrides these.</p>
+      <div class="dash-form-group"><label>Default Shipping Charge (₹)</label><input type="number" step="0.01" min="0" id="set-shipping" value="${globalSettings.shippingCharge || 0}"></div>
+      <div class="dash-form-group"><label>Free Shipping Threshold (₹)</label><input type="number" step="0.01" min="0" id="set-threshold" value="${globalSettings.freeShippingThreshold || 0}" placeholder="0 = disabled"></div>
+      <button class="btn btn-primary" id="save-settings-btn">Save Settings</button>
+      <div id="settings-status" style="margin-top:12px;font-size:14px;"></div>
+    </div>
+
+    <div class="admin-main" style="padding:20px;margin-top:16px;">
+      <h3 style="font-family:var(--font-serif);font-size:20px;margin-bottom:16px;">Store Info</h3>
+      <p style="color:var(--text-muted);font-size:13.5px;">Store Name: <strong>PrettyPick</strong></p>
+      <p style="color:var(--text-muted);font-size:13.5px;">Currency: <strong>INR (₹)</strong></p>
+      <p style="color:var(--text-muted);font-size:13.5px;">Admin Email: <strong>${escapeHtml(adminUser.email)}</strong></p>
+    </div>
+  `;
+  document.getElementById('save-settings-btn').onclick = async () => {
+    const status = document.getElementById('settings-status');
+    const shippingCharge = parseFloat(document.getElementById('set-shipping').value) || 0;
+    const freeShippingThreshold = parseFloat(document.getElementById('set-threshold').value) || 0;
+    status.textContent = 'Saving…'; status.style.color = 'var(--text-muted)';
+    try {
+      await setDoc(doc(db, 'settings', 'shipping'), {
+        shippingCharge,
+        freeShippingThreshold,
+        updatedAt: serverTimestamp()
+      });
+      globalSettings = { shippingCharge, freeShippingThreshold };
+      await logAction('settings.update', { shippingCharge, freeShippingThreshold });
+      status.textContent = 'Settings saved.'; status.style.color = 'green';
+      showToast('Settings saved', 'success');
+    } catch (e) {
+      status.textContent = 'Failed: ' + e.code; status.style.color = '#dc2626';
+      showToast('Failed: ' + e.code, 'error');
+    }
+  };
+}
+
+/* ============================================================
+   AUDIT LOG
+   ============================================================ */
+async function renderAudit(m) {
+  m.innerHTML = topbar('Audit Log', 'Latest 50 administrative actions');
+  const snap = await getDocs(query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(50)));
+  if (snap.empty) { m.innerHTML += '<p style="color:var(--text-muted);">No entries yet.</p>'; return; }
+  m.innerHTML += snap.docs.map(d => {
+    const r = d.data();
+    const when = r.createdAt?.toDate ? r.createdAt.toDate().toLocaleString() : '—';
+    return `<div class="admin-row">
+      <div class="admin-row-body">
+        <div class="admin-row-title">${escapeHtml(r.action || '')}</div>
+        <div class="admin-row-meta">${escapeHtml(r.actorEmail || '')} · ${escapeHtml(when)} · ${escapeHtml(JSON.stringify(r.details || {}))}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ============================================================
+   IMGBB UPLOAD (with progress)
+   ============================================================ */
+async function uploadImage(file, onProgress) {
+  if (!IMGBB_API_KEY || IMGBB_API_KEY.includes('PASTE')) {
+    showToast('ImgBB API key missing in imgbb-config.js', 'error');
+    return null;
+  }
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    showToast('Invalid file type. Use JPG, PNG, WebP, GIF or AVIF.', 'warning');
+    return null;
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    showToast(`Image must be under ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} MB`, 'warning');
+    return null;
+  }
+
+  const form = new FormData();
+  form.append('image', file);
+
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${IMGBB_UPLOAD_URL}?key=${encodeURIComponent(IMGBB_API_KEY)}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      try {
+        const json = JSON.parse(xhr.responseText);
+        if (json.success) {
+          const data = json.data || {};
+          const candidate = data.url || data.display_url || (data.image && data.image.url) || (data.thumb && data.thumb.url);
+          const clean = normaliseImageUrl(candidate);
+          if (clean) {
+            showToast('Image uploaded', 'success');
+            resolve(clean);
+            return;
+          }
+          showToast('Upload succeeded but no usable URL returned', 'error');
+          resolve(null);
+        } else {
+          showToast('Upload failed: ' + (json.error?.message || 'unknown'), 'error');
+          resolve(null);
+        }
+      } catch (e) {
+        showToast('Upload error parsing response', 'error');
+        resolve(null);
+      }
+    };
+    xhr.onerror = () => {
+      showToast('Upload network error', 'error');
+      resolve(null);
+    };
+    xhr.send(form);
+  });
+}
+</script>
+</body>
+</html>

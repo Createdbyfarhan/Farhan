@@ -1,0 +1,143 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ---------- helpers ---------- */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && userDoc(request.auth.uid).role == 'admin';
+    }
+
+    /* ---------- users ---------- */
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if isSignedIn() && (
+        request.auth.uid == uid ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    /* ---------- public catalog (products, categories, subcategories, banners, coupons, settings) ---------- */
+    match /products/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /categories/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /subcategories/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /banners/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /coupons/{docId} {
+      // Coupons must be readable for validation at checkout, but only admins write.
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+    match /couponUsages/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    /* ---------- reviews ---------- */
+    match /reviews/{docId} {
+      // Approved reviews are public; own reviews readable; admin sees all.
+      allow read: if (resource.data.status == 'approved')
+        || (isSignedIn() && resource.data.userId == request.auth.uid)
+        || isAdmin();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow update: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid
+            && request.resource.data.status == 'pending');
+      allow delete: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    /* ---------- orders ---------- */
+    match /orders/{orderId} {
+      // Owner reads own order; admin reads all.
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      // Only the signed-in user can create their own order.
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      // Owner may cancel their own pending order; admin may update anything.
+      allow update: if isAdmin()
+        || (isSignedIn()
+            && resource.data.userId == request.auth.uid
+            && resource.data.orderStatus == 'pending'
+            && request.resource.data.orderStatus == 'cancelled');
+      allow delete: if isAdmin();
+    }
+
+    /* ---------- notifications ---------- */
+    match /notifications/{notifId} {
+      // Any signed-in user may read notification content
+      // (the fan-out enforces per-user delivery via userNotifications).
+      allow read: if isSignedIn();
+      // Only admin may create, edit, delete notification documents.
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /userNotifications/{unId} {
+      // User reads their own; admin reads all.
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      // Admin can create (fan-out), and users cannot create for others.
+      allow create: if isAdmin();
+      // User may only update their OWN record's isRead / readAt fields.
+      allow update: if isSignedIn() && (
+        (resource.data.userId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['isRead','readAt']))
+        || isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    /* ---------- auditLogs ---------- */
+    match /auditLogs/{docId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    /* ---------- bootstrap config ---------- */
+    match /config/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    /* ---------- catch-all deny ---------- */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
